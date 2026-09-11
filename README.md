@@ -1,78 +1,64 @@
-# React + TypeScript + Vite
+# 🌞 Grid Guard Solar Monitoring
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+> **Protect the grid. Power the future. ⚡**
 
-Currently, two official plugins are available:
+Grid Guard Solar Monitoring is a modern web-based solar energy monitoring platform designed to monitor solar power generation, grid conditions, energy performance, system health, alerts, and ML-based fault detection from a single dashboard.
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+## ✨ Features
 
-## React Compiler
+- 📊 **Dashboard** - View important solar and grid parameters at a glance
+- 📈 **Analytics** - Analyze system performance and energy data
+- ☀️ **Energy Monitoring** - Track solar power and energy generation
+- 🔌 **Grid Monitoring** - Monitor voltage, frequency, power factor, and other parameters
+- 🔗 **Sensor Connectivity** - Designed for ESP32/STM32 sensor integration
+- 🚨 **Alerts** - Display important system conditions and warnings
+- 🤖 **ML Detection** - Support for machine-learning-based abnormality and fault detection
+- 🔐 **Authentication** - Registration and login system
+- ⚙️ **Settings** - Manage system configuration
+- 📱 **Responsive UI** - Designed for desktop and mobile screens
 
-The React Compiler is enabled on this template. See [this documentation](https://react.dev/learn/react-compiler) for more information.
+## 🛠️ Tech Stack
 
-Note: This will impact Vite dev & build performances.
-You can also try [the experimental native React Compiler support in plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react/README.md#rust-react-compiler) by using `compiler: true` in the plugin options instead of using the Babel plugin.
+### Frontend
+- React
+- TypeScript
+- Vite
+- Tailwind CSS
 
-## Expanding the ESLint configuration
+### Hardware Integration
+- ESP32
+- STM32
+- Solar and electrical sensors
 
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
+### Planned Technologies
+- Real-time sensor communication
+- Machine Learning
+- Sensor data synchronization
+- Backend/API integration
 
-```js
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
+## 📁 Project Structure
 
-      // Remove tseslint.configs.recommended and replace with this
-      tseslint.configs.recommendedTypeChecked,
-      // Alternatively, use this for stricter rules
-      tseslint.configs.strictTypeChecked,
-      // Optionally, add this for stylistic rules
-      tseslint.configs.stylisticTypeChecked,
-
-      // Other configs...
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
-
-```
-
-You can also install [eslint-plugin-react-x](https://npmx.dev/package/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://npmx.dev/package/eslint-plugin-react-dom) for React-specific lint rules:
-
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
-
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-      // Enable lint rules for React
-      reactX.configs['recommended-typescript'],
-      // Enable lint rules for React DOM
-      reactDom.configs.recommended,
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
-
-```
+```text
+Gridguardsolarmonitoring/
+├── public/
+├── src/
+│   ├── assets/
+│   ├── components/
+│   │   ├── DashboardHeader.tsx
+│   │   ├── DashboardSidebar.tsx
+│   │   ├── Navbar.tsx
+│   │   └── StatCard.tsx
+│   ├── pages/
+│   │   ├── Dashboard/
+│   │   │   └── DashboardPage.tsx
+│   │   ├── HomePage.tsx
+│   │   ├── LoginPage.tsx
+│   │   └── RegisterPage.tsx
+│   ├── App.tsx
+│   ├── App.css
+│   ├── index.css
+│   ├── config.ts
+│   └── main.tsx
+├── package.json
+├── vite.config.ts
+└── README.md
