@@ -1,46 +1,57 @@
-import { Navigate, Route, Routes } from "react-router-dom";
-import type { ComponentType, ReactNode } from "react";
+import { Routes, Route } from "react-router-dom";
+
+import Navbar from "./components/Navbar";
 
 import HomePage from "./pages/HomePage";
 import LoginPage from "./pages/LoginPage";
 import RegisterPage from "./pages/RegisterPage";
 import DashboardPage from "./pages/Dashboard/DashboardPage";
 
-const LoginPageComponent = LoginPage as unknown as ComponentType;
-
-function ProtectedRoute({ children }: { children: ReactNode }) {
-  const loggedIn =
-    localStorage.getItem("gridguard_user") !== null;
-
-  if (!loggedIn) {
-    return <Navigate to="/login" replace />;
-  }
-
-  return <>{children}</>;
-}
-
-export default function App() {
+const App = () => {
   return (
     <Routes>
-      <Route path="/" element={<HomePage />} />
 
-      <Route path="/login" element={<LoginPageComponent />} />
-
-      <Route path="/register" element={<RegisterPage />} />
+      {/* PUBLIC PAGES */}
 
       <Route
-        path="/dashboard"
+        path="/"
         element={
-          <ProtectedRoute>
-            <DashboardPage />
-          </ProtectedRoute>
+          <>
+            <Navbar />
+            <HomePage />
+          </>
         }
       />
 
       <Route
-        path="*"
-        element={<Navigate to="/" replace />}
+        path="/login"
+        element={
+          <>
+            <Navbar />
+            <LoginPage />
+          </>
+        }
       />
+
+      <Route
+        path="/register"
+        element={
+          <>
+            <Navbar />
+            <RegisterPage />
+          </>
+        }
+      />
+
+      {/* DASHBOARD */}
+
+      <Route
+        path="/dashboard"
+        element={<DashboardPage />}
+      />
+
     </Routes>
   );
-}
+};
+
+export default App;

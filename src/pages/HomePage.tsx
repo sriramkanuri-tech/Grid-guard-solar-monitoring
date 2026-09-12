@@ -1,16 +1,21 @@
-import Navbar from "../components/Navbar";
-
 export default function HomePage() {
-  const isLoggedIn = localStorage.getItem("gridguard_user") !== null;
+  const isLoggedIn =
+    localStorage.getItem("gridguard_user") !== null;
 
-  const user = JSON.parse(
-    localStorage.getItem("gridguard_user") || "{}"
-  );
+  let user = { name: "" };
+
+  try {
+    const storedUser = localStorage.getItem("gridguard_user");
+
+    if (storedUser) {
+      user = JSON.parse(storedUser);
+    }
+  } catch {
+    user = { name: "" };
+  }
 
   return (
     <div className="min-h-screen bg-slate-950 text-white">
-
-      <Navbar />
 
       {/* ===================================================== */}
       {/* HERO */}
@@ -20,7 +25,6 @@ export default function HomePage() {
         id="home"
         className="relative flex min-h-screen items-center overflow-hidden px-6 pt-24"
       >
-
         {/* GRID BACKGROUND */}
         <div
           className="absolute inset-0 opacity-[0.06]"
@@ -43,24 +47,17 @@ export default function HomePage() {
 
             {/* BADGE */}
             <div className="mb-7 inline-flex items-center gap-2 rounded-full border border-lime-400/20 bg-lime-400/10 px-4 py-2 text-sm text-lime-300">
-
               <span className="h-2 w-2 animate-pulse rounded-full bg-lime-400" />
-
               Smart Solar & Grid Monitoring
-
             </div>
 
             {/* TITLE */}
             <h1 className="text-5xl font-bold leading-[1.05] tracking-tight sm:text-6xl lg:text-7xl">
-
               Protect the grid.
-
               <br />
-
               <span className="text-lime-400">
                 Power the future.
               </span>
-
             </h1>
 
             {/* DESCRIPTION */}
@@ -165,11 +162,8 @@ export default function HomePage() {
                 </div>
 
                 <div className="flex items-center gap-2 rounded-full bg-lime-400/10 px-3 py-1.5 text-xs text-lime-400">
-
                   <span className="h-2 w-2 animate-pulse rounded-full bg-lime-400" />
-
                   Live
-
                 </div>
 
               </div>
@@ -196,19 +190,32 @@ export default function HomePage() {
                 {/* GRAPH */}
                 <div className="mt-7 flex h-28 items-end gap-2">
 
-                  {[35, 48, 43, 61, 57, 72, 65, 80, 74, 91, 82, 95].map(
-                    (height, index) => (
+                  {[
+                    35,
+                    48,
+                    43,
+                    61,
+                    57,
+                    72,
+                    65,
+                    80,
+                    74,
+                    91,
+                    82,
+                    95,
+                  ].map((height, index) => (
+                    <div
+                      key={index}
+                      className="flex h-full flex-1 items-end"
+                    >
                       <div
-                        key={index}
-                        className="flex h-full flex-1 items-end"
-                      >
-                        <div
-                          style={{ height: `${height}%` }}
-                          className="w-full rounded-t-md bg-lime-400/30 transition hover:bg-lime-400"
-                        />
-                      </div>
-                    )
-                  )}
+                        style={{
+                          height: `${height}%`,
+                        }}
+                        className="w-full rounded-t-md bg-lime-400/30 transition hover:bg-lime-400"
+                      />
+                    </div>
+                  ))}
 
                 </div>
 
@@ -243,13 +250,11 @@ export default function HomePage() {
                   </p>
 
                   <div className="mt-3 flex items-center gap-2">
-
                     <span className="h-2.5 w-2.5 rounded-full bg-lime-400" />
 
                     <span className="font-semibold">
                       Stable
                     </span>
-
                   </div>
 
                   <p className="mt-2 text-xs text-slate-500">
@@ -282,7 +287,6 @@ export default function HomePage() {
           </div>
 
         </div>
-
       </section>
 
       {/* ===================================================== */}
@@ -576,6 +580,7 @@ export default function HomePage() {
                   fill="none"
                   className="text-slate-950"
                 >
+
                   <circle
                     cx="12"
                     cy="12"
@@ -589,6 +594,7 @@ export default function HomePage() {
                     strokeWidth="2"
                     strokeLinecap="round"
                   />
+
                 </svg>
 
               </div>
