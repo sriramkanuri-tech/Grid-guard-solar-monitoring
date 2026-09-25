@@ -49,7 +49,7 @@ class DatabaseService {
       const defaultUsers: StoredUserCredential[] = [
         {
           uid: "admin-root-01",
-          email: "admin@gridguard.io",
+          email: "sriramkanuri4@gmail.com",
           password: "admin123",
           name: "System Administrator",
           phone: "+1 800 555 0199",
@@ -60,7 +60,7 @@ class DatabaseService {
         },
         {
           uid: "operator-01",
-          email: "operator@gridguard.io",
+          email: "sriramkanuri45@gmail.com",
           password: "operator123",
           name: "Sriram Kanuri",
           phone: "+91 98765 43210",

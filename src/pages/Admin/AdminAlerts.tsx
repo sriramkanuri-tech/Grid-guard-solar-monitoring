@@ -17,7 +17,10 @@ import { getStoredUser } from "../../firebase/auth";
 import type { Alert, AlertSeverity } from "../../types/alert";
 
 export default function AdminAlerts() {
-  const [alerts, setAlerts] = useState<Alert[]>([]);
+  const [alerts, setAlerts] = useState<Alert[]>(() => {
+    const cached = localStorage.getItem("gridguard_cache_alerts");
+    return cached ? JSON.parse(cached) : [];
+  });
   const [filterSeverity, setFilterSeverity] = useState<string>("ALL");
   const [filterStatus, setFilterStatus] = useState<string>("ALL");
   const [showAddModal, setShowAddModal] = useState(false);
@@ -38,10 +41,19 @@ export default function AdminAlerts() {
   }, []);
 
   const handleAcknowledge = async (alertId: string) => {
-    await alertService.acknowledgeAlert(alertId, user?.email || "admin@gridguard.io");
+    const ackEmail = user?.email || "sriramkanuri4@gmail.com";
+    setAlerts((prev) =>
+      prev.map((a) =>
+        a.id === alertId ? { ...a, acknowledged: true, acknowledgedBy: ackEmail } : a
+      )
+    );
+    await alertService.acknowledgeAlert(alertId, ackEmail);
   };
 
   const handleResolve = async (alertId: string) => {
+    setAlerts((prev) =>
+      prev.map((a) => (a.id === alertId ? { ...a, resolved: true, status: "RESOLVED" } : a))
+    );
     await alertService.resolveAlert(alertId);
   };
 
@@ -50,26 +62,36 @@ export default function AdminAlerts() {
     setCreating(true);
     setMsgNotice("");
 
-    try {
-      await alertService.createAlert({
-        nodeId,
-        type,
-        severity,
-        message,
-        value: 254.2,
-        threshold: 245.0,
-        resolved: false,
-        status: "OPEN",
-        acknowledged: false,
-        timestamp: new Date().toISOString(),
-      });
+    const newAlertData: Omit<Alert, "id"> = {
+      nodeId,
+      type,
+      severity,
+      message,
+      value: 254.2,
+      threshold: 245.0,
+      resolved: false,
+      status: "OPEN",
+      acknowledged: false,
+      timestamp: new Date().toISOString(),
+    };
 
-      setMsgNotice("Alert registered in Firebase RTDB and dispatched to Telegram service!");
+    try {
+      const alertId = await alertService.createAlert(newAlertData);
+
+      const createdAlert: Alert = {
+        ...newAlertData,
+        id: alertId,
+      };
+
+      // Optimistically show newly created alert immediately!
+      setAlerts((prev) => [createdAlert, ...prev.filter((a) => a.id !== alertId)]);
+
+      setMsgNotice("Alert registered in Firebase RTDB and dispatched!");
       setTimeout(() => {
         setShowAddModal(false);
         setMessage("");
         setMsgNotice("");
-      }, 1500);
+      }, 1000);
     } catch (err: unknown) {
       setMsgNotice("Failed registering alert.");
     } finally {

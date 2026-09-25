@@ -89,7 +89,7 @@ export default function Settings() {
     setMfaCode("");
 
     try {
-      const email = user?.email || "operator@gridguard.io";
+      const email = user?.email || "sriramkanuri4@gmail.com";
       const data = await apiClient.generateMfa(email);
       setMfaSecret(data.secret);
       setMfaUrl(data.otpauth_url);

@@ -357,12 +357,11 @@ export const registerUser = async (
   email: string,
   pass: string,
   name: string,
-  phone?: string,
-  requestedAdmin: boolean = false
+  phone?: string
 ): Promise<UserProfile> => {
   const cleanEmail = email.trim().toLowerCase();
   const cleanName = name.trim();
-  const isAdmin = isConfiguredAdminEmail(cleanEmail) || requestedAdmin;
+  const isAdmin = isConfiguredAdminEmail(cleanEmail);
   const role = isAdmin ? "admin" : "member";
   const nowStr = new Date().toISOString();
 

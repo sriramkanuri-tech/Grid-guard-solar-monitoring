@@ -140,7 +140,7 @@ export default function Profile() {
                 </span>
               )}
               <p className="text-xs text-lime-400 font-semibold mt-1 font-mono">{user?.role || "Solar Systems Engineer"}</p>
-              <p className="text-xs text-slate-400 mt-1">{user?.email || "admin@gridguard.io"}</p>
+              <p className="text-xs text-slate-400 mt-1">{user?.email || "sriramkanuri4@gmail.com"}</p>
             </div>
 
             <div className="mt-6 space-y-4 text-xs">
@@ -163,7 +163,7 @@ export default function Profile() {
                 <Mail size={16} className="text-lime-400 shrink-0" />
                 <div>
                   <span className="text-slate-500 block text-[10px] uppercase font-bold tracking-wider">Email Address</span>
-                  <span className="text-white font-medium">{user?.email || "admin@gridguard.io"}</span>
+                  <span className="text-white font-medium">{user?.email || "sriramkanuri4@gmail.com"}</span>
                 </div>
               </div>
 

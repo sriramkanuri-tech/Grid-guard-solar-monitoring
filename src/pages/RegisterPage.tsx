@@ -28,7 +28,6 @@ export default function RegisterPage() {
 
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
-  const [isAdmin, setIsAdmin] = useState(false);
 
   const [error, setError] = useState("");
   const [isLoading, setIsLoading] = useState(false);
@@ -64,7 +63,7 @@ export default function RegisterPage() {
 
     setIsLoading(true);
     try {
-      const profile = await registerUser(email, password, name, phone, isAdmin);
+      const profile = await registerUser(email, password, name, phone);
       if (profile.role === "admin" || isConfiguredAdminEmail(profile.email)) {
         navigate("/admin/dashboard");
       } else {
@@ -189,7 +188,7 @@ export default function RegisterPage() {
                     required
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
-                    placeholder="operator@gridguard.io"
+                    placeholder="operator@gmail.com"
                     className="w-full rounded-xl border border-slate-700 bg-slate-950/70 py-2.5 pl-10 pr-4 text-xs text-slate-100 placeholder:text-slate-500 outline-none transition focus:border-lime-400 focus:ring-1 focus:ring-lime-400/30"
                   />
                 </div>
@@ -305,29 +304,6 @@ export default function RegisterPage() {
                   ✓ Passwords match
                 </span>
               </div>
-            </div>
-
-            {/* ROLE / PRIVILEGE OPTION */}
-            <div className="rounded-xl border border-slate-800 bg-[#07111F]/80 p-3">
-              <label className="flex items-start gap-3 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={isAdmin}
-                  onChange={(e) => setIsAdmin(e.target.checked)}
-                  className="mt-0.5 h-4 w-4 rounded border-slate-700 bg-slate-900 text-lime-400 focus:ring-lime-400/30 accent-lime-400 cursor-pointer"
-                />
-                <div className="text-xs">
-                  <div className="flex items-center gap-2">
-                    <span className="font-semibold text-white">Administrator Role</span>
-                    <span className="rounded bg-amber-400/10 px-1.5 py-0.5 text-[10px] font-mono font-medium text-amber-300 border border-amber-400/30">
-                      ROOT PRIVILEGES
-                    </span>
-                  </div>
-                  <p className="text-[11px] text-slate-400 mt-0.5">
-                    Grant administrative permissions to manage telemetry, sensors, and database settings.
-                  </p>
-                </div>
-              </label>
             </div>
 
             {error && (

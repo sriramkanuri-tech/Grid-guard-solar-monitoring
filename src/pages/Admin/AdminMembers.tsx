@@ -21,7 +21,10 @@ import { apiClient } from "../../services/apiClient";
 import type { UserProfile, UserRole, UserAccountStatus } from "../../types/user";
 
 export default function AdminMembers() {
-  const [users, setUsers] = useState<UserProfile[]>([]);
+  const [users, setUsers] = useState<UserProfile[]>(() => {
+    const cached = localStorage.getItem("gridguard_cache_users");
+    return cached ? JSON.parse(cached) : [];
+  });
   const [presenceMap, setPresenceMap] = useState<Record<string, { online: boolean }>>({});
   const [searchTerm, setSearchTerm] = useState("");
   const [roleFilter, setRoleFilter] = useState<string>("ALL");
@@ -80,20 +83,25 @@ export default function AdminMembers() {
       await rtdbService.saveUserProfile(uid, newProfile);
       await rtdbService.logAuditEvent("ADMIN_CREATE_MEMBER", cleanEmail, { role: newRole, status: newStatus });
 
-      // Dispatch onboarding email via backend with deployed URL
-      await apiClient.sendEmail({
+      // Optimistically update local users state immediately
+      setUsers((prev) => [...prev.filter((u) => u.uid !== uid), newProfile]);
+
+      // Dispatch onboarding email asynchronously (non-blocking)
+      apiClient.sendEmail({
         recipients: [cleanEmail],
         subject: "Welcome to Grid Guard Solar Monitoring Platform",
         message: `Hello ${newName},\n\nYour operator account on Grid Guard Solar Monitoring has been provisioned with the role of [${newRole.toUpperCase()}].\n\nYou can sign in to the platform using your email: ${cleanEmail}.\n\nAccess the portal: https://gridguardsolarmonitoring.web.app\n\nDirect Login: https://gridguardsolarmonitoring.web.app/login\n\nBest regards,\nGrid Guard Operations Team`,
+      }).catch((emailErr) => {
+        console.warn("[Onboarding Email Notice] Dispatch deferred:", emailErr);
       });
 
-      setAddMsg("Member created successfully and invitation email dispatched!");
+      setAddMsg("Member added successfully and registered in Firebase RTDB!");
       setTimeout(() => {
         setShowAddModal(false);
         setNewName("");
         setNewEmail("");
         setAddMsg("");
-      }, 1500);
+      }, 1200);
     } catch (err: unknown) {
       setAddMsg(err instanceof Error ? err.message : "Failed to create member.");
     } finally {
@@ -103,6 +111,7 @@ export default function AdminMembers() {
 
   const handleToggleStatus = async (user: UserProfile) => {
     const newStatus: UserAccountStatus = user.status === "disabled" ? "active" : "disabled";
+    setUsers((prev) => prev.map((u) => (u.uid === user.uid ? { ...u, status: newStatus } : u)));
     await rtdbService.setUserStatus(user.uid, newStatus);
     await rtdbService.logAuditEvent(
       newStatus === "disabled" ? "DISABLE_MEMBER" : "ENABLE_MEMBER",
@@ -113,6 +122,7 @@ export default function AdminMembers() {
 
   const handleDeleteUser = async (user: UserProfile) => {
     if (window.confirm(`Are you sure you want to permanently delete operator ${user.name} (${user.email})?`)) {
+      setUsers((prev) => prev.filter((u) => u.uid !== user.uid));
       await rtdbService.deleteUser(user.uid);
       await rtdbService.logAuditEvent("DELETE_MEMBER", user.email);
     }
@@ -170,11 +180,16 @@ export default function AdminMembers() {
       u.createdAt || "",
       u.lastLogin || "",
     ]);
-    const csvContent = "data:text/csv;charset=utf-8," + [headers.join(","), ...rows.map((r) => r.join(","))].join("\n");
+    const csvContent = [headers.join(","), ...rows.map((r) => r.join(","))].join("\n");
+    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
-    link.href = encodeURI(csvContent);
+    link.href = url;
     link.download = `gridguard_members_${Date.now()}.csv`;
+    document.body.appendChild(link);
     link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
   };
 
   return (
@@ -408,7 +423,7 @@ export default function AdminMembers() {
                 <input
                   type="email"
                   required
-                  placeholder="operator@gridguard.io"
+                  placeholder="operator@gmail.com"
                   value={newEmail}
                   onChange={(e) => setNewEmail(e.target.value)}
                   className="w-full rounded-xl border border-slate-700 bg-slate-950/80 px-4 py-2.5 text-xs text-white outline-none focus:border-amber-400"

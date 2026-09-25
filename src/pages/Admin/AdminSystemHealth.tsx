@@ -127,41 +127,36 @@ export default function AdminSystemHealth() {
     // 1. Check FastAPI Backend & ML
     const t0 = performance.now();
     try {
-      const res = await fetch(`${API_URL}/api/health`, { signal: AbortSignal.timeout(4000) });
+      const data = await apiClient.checkHealth();
       const latency = Math.round(performance.now() - t0);
-      if (res.ok) {
-        const data = await res.json();
-        setServices((prev) => ({
-          ...prev,
-          fastapi: {
-            ...prev.fastapi,
-            status: "ONLINE",
-            latencyMs: latency,
-            details: `Uptime: ${Math.round(data.uptime_seconds || 0)}s | Version: ${data.version || "1.0"}`,
-            lastChecked: new Date().toLocaleTimeString(),
-          },
-          mlModel: {
-            ...prev.mlModel,
-            status: data.model_loaded ? "ONLINE" : "DEGRADED",
-            latencyMs: latency,
-            details: data.model_loaded
-              ? "grid_guard_solar_model.joblib loaded & ready"
-              : "Model artifact missing or uninitialized",
-            lastChecked: new Date().toLocaleTimeString(),
-          },
-          smtp: {
-            ...prev.smtp,
-            status: data.smtp_configured ? "ONLINE" : "DEGRADED",
-            latencyMs: latency,
-            details: data.smtp_configured
-              ? "Configured with Gmail relay: sriramkanuri45@gmail.com"
-              : "SMTP environment credentials incomplete",
-            lastChecked: new Date().toLocaleTimeString(),
-          },
-        }));
-      } else {
-        throw new Error(`HTTP ${res.status}`);
-      }
+      setServices((prev) => ({
+        ...prev,
+        fastapi: {
+          ...prev.fastapi,
+          status: "ONLINE",
+          latencyMs: latency,
+          details: `Uptime: ${Math.round(data.uptime_seconds || 0)}s | Version: ${data.version || "2.0.0"}`,
+          lastChecked: new Date().toLocaleTimeString(),
+        },
+        mlModel: {
+          ...prev.mlModel,
+          status: data.model_loaded ? "ONLINE" : "DEGRADED",
+          latencyMs: latency,
+          details: data.model_loaded
+            ? "grid_guard_solar_model.joblib loaded & ready"
+            : "Model artifact missing or uninitialized",
+          lastChecked: new Date().toLocaleTimeString(),
+        },
+        smtp: {
+          ...prev.smtp,
+          status: data.smtp_configured ? "ONLINE" : "DEGRADED",
+          latencyMs: latency,
+          details: data.smtp_configured
+            ? "Configured with Gmail relay: sriramkanuri45@gmail.com"
+            : "SMTP environment credentials incomplete",
+          lastChecked: new Date().toLocaleTimeString(),
+        },
+      }));
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : "Connection failed";
       setServices((prev) => ({

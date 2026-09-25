@@ -194,7 +194,7 @@ export default function DashboardSidebar({ open, onClose }: DashboardSidebarProp
                 )}
               </div>
               <p className="mt-1 text-[10px] text-slate-400 truncate font-mono">
-                {user?.email || "operator@gridguard.io"}
+                {user?.email || "sriramkanuri4@gmail.com"}
               </p>
             </div>
 

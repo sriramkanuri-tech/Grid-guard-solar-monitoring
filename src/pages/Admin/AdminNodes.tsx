@@ -17,7 +17,10 @@ import { nodeService } from "../../services/nodeService";
 import { rtdbService, type SolarNode } from "../../firebase/database";
 
 export default function AdminNodes() {
-  const [nodes, setNodes] = useState<SolarNode[]>([]);
+  const [nodes, setNodes] = useState<SolarNode[]>(() => {
+    const cached = localStorage.getItem("gridguard_cache_nodes");
+    return cached ? JSON.parse(cached) : [];
+  });
   const [showModal, setShowModal] = useState(false);
   const [editingNode, setEditingNode] = useState<SolarNode | null>(null);
 
@@ -94,6 +97,9 @@ export default function AdminNodes() {
         await nodeService.createNode(payload);
       }
 
+      // Optimistically update nodes state so newly provisioned node shows up instantly!
+      setNodes((prev) => [...prev.filter((n) => n.nodeId !== payload.nodeId), payload]);
+
       // Also sync telemetry in RTDB
       await rtdbService.pushTelemetry(payload.nodeId, {
         nodeId: payload.nodeId,
@@ -115,6 +121,7 @@ export default function AdminNodes() {
 
   const handleDelete = async (id: string) => {
     if (window.confirm(`Permanently remove node ${id}?`)) {
+      setNodes((prev) => prev.filter((n) => n.nodeId !== id));
       await nodeService.deleteNode(id);
     }
   };

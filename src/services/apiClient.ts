@@ -128,7 +128,10 @@ export const apiClient = {
     return apiFetch<{
       status: string;
       service: string;
+      version?: string;
       model?: string;
+      model_loaded?: boolean;
+      uptime_seconds?: number;
       timestamp?: number;
       smtp_configured?: boolean;
     }>("/api/health");

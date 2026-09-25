@@ -21,15 +21,25 @@ import { rtdbService, type SolarNode, type RealtimeTelemetry } from "../../fireb
 import type { Alert } from "../../types/alert";
 
 export default function AdminDashboard() {
-  const [stats, setStats] = useState<PresenceStats>({
-    totalMembers: 0,
-    onlineMembers: 0,
-    offlineMembers: 0,
-    presenceMap: {},
-    users: [],
+  const [stats, setStats] = useState<PresenceStats>(() => {
+    const cachedUsers = localStorage.getItem("gridguard_cache_users");
+    const users = cachedUsers ? JSON.parse(cachedUsers) : [];
+    return {
+      totalMembers: users.length || 1,
+      onlineMembers: 1,
+      offlineMembers: Math.max(0, (users.length || 1) - 1),
+      presenceMap: {},
+      users,
+    };
   });
-  const [nodes, setNodes] = useState<SolarNode[]>([]);
-  const [alerts, setAlerts] = useState<Alert[]>([]);
+  const [nodes, setNodes] = useState<SolarNode[]>(() => {
+    const cached = localStorage.getItem("gridguard_cache_nodes");
+    return cached ? JSON.parse(cached) : [];
+  });
+  const [alerts, setAlerts] = useState<Alert[]>(() => {
+    const cached = localStorage.getItem("gridguard_cache_alerts");
+    return cached ? JSON.parse(cached) : [];
+  });
   const [telemetryMap, setTelemetryMap] = useState<Record<string, RealtimeTelemetry>>({});
   const [systemHealth, setSystemHealth] = useState<string>("OPTIMAL");
 
@@ -71,6 +81,7 @@ export default function AdminDashboard() {
     document.body.appendChild(link);
     link.click();
     link.remove();
+    URL.revokeObjectURL(url);
   };
 
   const exportTelemetryCsv = () => {

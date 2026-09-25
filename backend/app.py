@@ -140,7 +140,7 @@ def send_smtp_email(to_addrs: List[str], subject: str, text_content: str, html_c
     smtp_port = int(os.getenv("SMTP_PORT", "587"))
     smtp_user = os.getenv("SMTP_USER", "").strip()
     smtp_pass = os.getenv("SMTP_PASS", "").strip()
-    smtp_from = os.getenv("SMTP_FROM", smtp_user or "Grid Guard Solar <noreply@gridguard.io>")
+    smtp_from = os.getenv("SMTP_FROM", smtp_user or "Grid Guard Solar <sriramkanuri45@gmail.com>")
 
     if not smtp_user or not smtp_pass:
         print("[SMTP Error] SMTP_USER or SMTP_PASS not set in environment.")
@@ -173,6 +173,8 @@ def send_smtp_email(to_addrs: List[str], subject: str, text_content: str, html_c
         return False
 
 
+START_TIME = time.time()
+
 # ==========================================================
 # ENDPOINTS
 # ==========================================================
@@ -192,7 +194,10 @@ def health():
     return {
         "status": "ok",
         "service": "Grid Guard API",
+        "version": "2.0.0",
         "model": "Isolation Forest" if model is not None else "unavailable",
+        "model_loaded": model is not None,
+        "uptime_seconds": int(time.time() - START_TIME),
         "timestamp": int(time.time()),
         "smtp_configured": bool(os.getenv("SMTP_USER") and os.getenv("SMTP_PASS")),
     }

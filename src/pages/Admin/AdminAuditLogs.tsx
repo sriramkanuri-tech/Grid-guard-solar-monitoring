@@ -16,8 +16,20 @@ import {
 import { rtdbService, type AuditLogEntry } from "../../firebase/database";
 
 export default function AdminAuditLogs() {
-  const [logs, setLogs] = useState<AuditLogEntry[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [logs, setLogs] = useState<AuditLogEntry[]>(() => {
+    const cached = localStorage.getItem("gridguard_cache_audit");
+    if (cached) {
+      try {
+        const parsed = JSON.parse(cached);
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      } catch {}
+    }
+    return [];
+  });
+  const [loading, setLoading] = useState(() => {
+    const cached = localStorage.getItem("gridguard_cache_audit");
+    return !cached;
+  });
   const [search, setSearch] = useState("");
   const [actionFilter, setActionFilter] = useState<string>("ALL");
   const [selectedLog, setSelectedLog] = useState<AuditLogEntry | null>(null);
@@ -37,8 +49,8 @@ export default function AdminAuditLogs() {
     const q = search.toLowerCase();
     const matchesSearch =
       !q ||
-      log.action.toLowerCase().includes(q) ||
-      log.actorEmail.toLowerCase().includes(q) ||
+      (log.action || "").toLowerCase().includes(q) ||
+      (log.actorEmail || "").toLowerCase().includes(q) ||
       (log.target && log.target.toLowerCase().includes(q)) ||
       (log.metadata && JSON.stringify(log.metadata).toLowerCase().includes(q));
     return matchesAction && matchesSearch;

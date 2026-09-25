@@ -57,7 +57,7 @@ An abnormal telemetry condition has been detected on Node GG-NODE-01 by the Isol
 - Telemetry condition: Inverter AC Overvoltage excursion > 250V
 - Action: Inspect the substation inverter breaker immediately.
 
-Live control room: https://gridguard.io/admin/alerts`,
+Live control room: https://gridguardsolarmonitoring.web.app/admin/alerts`,
   },
 ];
 
