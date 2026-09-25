@@ -80,12 +80,11 @@ export default function AdminMembers() {
       await rtdbService.saveUserProfile(uid, newProfile);
       await rtdbService.logAuditEvent("ADMIN_CREATE_MEMBER", cleanEmail, { role: newRole, status: newStatus });
 
-      // Dispatch onboarding email via backend
-      const loginUrl = `${window.location.origin}/login`;
+      // Dispatch onboarding email via backend with deployed URL
       await apiClient.sendEmail({
         recipients: [cleanEmail],
         subject: "Welcome to Grid Guard Solar Monitoring Platform",
-        message: `Hello ${newName},\n\nYour operator account on Grid Guard Solar Monitoring has been provisioned with the role of [${newRole.toUpperCase()}].\n\nYou can sign in to the platform using your email: ${cleanEmail}.\n\nAccess the portal: ${loginUrl}\n\nBest regards,\nGrid Guard Operations Team`,
+        message: `Hello ${newName},\n\nYour operator account on Grid Guard Solar Monitoring has been provisioned with the role of [${newRole.toUpperCase()}].\n\nYou can sign in to the platform using your email: ${cleanEmail}.\n\nAccess the portal: https://gridguardsolarmonitoring.web.app\n\nDirect Login: https://gridguardsolarmonitoring.web.app/login\n\nBest regards,\nGrid Guard Operations Team`,
       });
 
       setAddMsg("Member created successfully and invitation email dispatched!");
