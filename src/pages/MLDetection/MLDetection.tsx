@@ -27,6 +27,7 @@ import {
 
 import { mlService } from "../../services/mlService";
 import { ML_API_URL } from "../../config";
+import { apiClient } from "../../services/apiClient";
 import { gridDataService } from "../../services/gridDataService";
 import { getStoredUser } from "../../firebase/auth";
 import type { MLPredictionResponse } from "../../types/ml";
@@ -201,25 +202,23 @@ RECOMMENDED ACTION:
 Dispatched automatically by Grid Guard ML Autonomous Engine to: ${targetEmail}`;
 
     try {
-      const res = await fetch("http://localhost:8000/api/admin/send-email", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          recipients: [targetEmail],
-          subject,
-          message,
-        }),
+      await apiClient.sendEmail({
+        recipients: [targetEmail],
+        subject,
+        message,
       });
 
-      if (res.ok) {
-        const timeStr = new Date().toLocaleTimeString();
-        setLastAlertSentTime(timeStr);
-        setLastAlertRecipient(targetEmail);
-        setAlertDispatchToast(`Automated anomaly advisory dispatched to ${targetEmail} at ${timeStr}`);
-        setTimeout(() => setAlertDispatchToast(null), 8000);
+      const timeStr = new Date().toLocaleTimeString();
+      setLastAlertSentTime(timeStr);
+      setLastAlertRecipient(targetEmail);
+      setAlertDispatchToast(`Automated anomaly advisory dispatched to ${targetEmail} at ${timeStr}`);
+      setTimeout(() => setAlertDispatchToast(null), 8000);
+    } catch (e: any) {
+      if (import.meta.env.DEV) {
+        console.warn("[ML Alert] Failed to dispatch automated alert email:", e);
       }
-    } catch (e) {
-      console.warn("[ML Alert] Failed to dispatch automated alert email:", e);
+      setAlertDispatchToast("Unable to connect to Grid Guard server for alert dispatch.");
+      setTimeout(() => setAlertDispatchToast(null), 6000);
     }
   };
 

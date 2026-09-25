@@ -18,6 +18,7 @@ import {
 import { rtdbService, type SystemState } from "../../firebase/database";
 import { rtdb } from "../../firebase/config";
 import { ref, onValue } from "firebase/database";
+import { apiClient, API_URL } from "../../services/apiClient";
 
 interface ServiceHealth {
   name: string;
@@ -45,11 +46,11 @@ export default function AdminSystemHealth() {
       lastChecked: new Date().toLocaleTimeString(),
     },
     fastapi: {
-      name: "FastAPI Backend Server (:8000)",
+      name: "FastAPI Backend Service",
       category: "CORE",
       status: "CHECKING",
       latencyMs: null,
-      details: "Connecting to REST API...",
+      details: `Connecting to ${API_URL}...`,
       lastChecked: new Date().toLocaleTimeString(),
     },
     rtdb: {
@@ -126,7 +127,7 @@ export default function AdminSystemHealth() {
     // 1. Check FastAPI Backend & ML
     const t0 = performance.now();
     try {
-      const res = await fetch("http://localhost:8000/api/health", { signal: AbortSignal.timeout(4000) });
+      const res = await fetch(`${API_URL}/api/health`, { signal: AbortSignal.timeout(4000) });
       const latency = Math.round(performance.now() - t0);
       if (res.ok) {
         const data = await res.json();
@@ -210,23 +211,18 @@ export default function AdminSystemHealth() {
   const testMlInference = async () => {
     try {
       const t0 = performance.now();
-      const res = await fetch("http://localhost:8000/api/anomaly/predict", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          DC_POWER: 2858.2,
-          AC_POWER: 2750.0,
-          AMBIENT_TEMPERATURE: 30.5,
-          MODULE_TEMPERATURE: 38.2,
-          IRRADIATION: 850.0,
-          hour: 12.0,
-        }),
+      const data = await apiClient.predictAnomaly({
+        DC_POWER: 2858.2,
+        AC_POWER: 2750.0,
+        AMBIENT_TEMPERATURE: 30.5,
+        MODULE_TEMPERATURE: 38.2,
+        IRRADIATION: 850.0,
+        hour: 12.0,
       });
-      const data = await res.json();
       const latency = Math.round(performance.now() - t0);
       alert(`ML Model Test: status=${data.status}, score=${data.anomaly_score}, time=${latency}ms`);
     } catch {
-      alert("ML Inference test failed. Ensure backend is running on port 8000.");
+      alert("ML Inference test failed. Unable to connect to Grid Guard server.");
     }
   };
 
@@ -427,11 +423,10 @@ export default function AdminSystemHealth() {
           <button
             onClick={async () => {
               try {
-                const res = await fetch("http://localhost:8000/api/health");
-                const d = await res.json();
+                const d = await apiClient.checkHealth();
                 alert(`FastAPI Health Response:\n${JSON.stringify(d, null, 2)}`);
               } catch {
-                alert("FastAPI health query failed.");
+                alert("FastAPI health query failed. Unable to connect to Grid Guard server.");
               }
             }}
             className="flex items-center justify-between rounded-xl border border-slate-700 bg-slate-900/60 p-4 text-left hover:border-sky-500/50 hover:bg-slate-850 transition group"

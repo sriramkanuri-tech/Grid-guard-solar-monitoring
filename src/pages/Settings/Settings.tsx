@@ -10,6 +10,7 @@ import {
   LOCAL_STORAGE_ACCOUNT_KEY,
 } from "../../firebase/auth";
 import { rtdbService } from "../../firebase/database";
+import { apiClient } from "../../services/apiClient";
 import type { UserProfile } from "../../types/user";
 import {
   Sliders,
@@ -89,21 +90,11 @@ export default function Settings() {
 
     try {
       const email = user?.email || "operator@gridguard.io";
-      const res = await fetch("http://localhost:8000/api/auth/mfa/generate", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email }),
-      });
-
-      if (!res.ok) {
-        throw new Error("Failed to generate MFA secret from authentication engine.");
-      }
-
-      const data = await res.json();
+      const data = await apiClient.generateMfa(email);
       setMfaSecret(data.secret);
       setMfaUrl(data.otpauth_url);
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : "MFA generation failed.";
+      const msg = err instanceof Error ? err.message : "Unable to connect to Grid Guard server. Please try again.";
       setMfaError(msg);
     } finally {
       setMfaLoading(false);
@@ -123,16 +114,7 @@ export default function Settings() {
 
     setMfaLoading(true);
     try {
-      const res = await fetch("http://localhost:8000/api/auth/mfa/verify", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ secret: mfaSecret, code: mfaCode.trim() }),
-      });
-
-      const data = await res.json();
-      if (!res.ok) {
-        throw new Error(data.detail || "Invalid code. Please check your authenticator clock.");
-      }
+      await apiClient.verifyMfa(mfaSecret, mfaCode.trim());
 
       // Successfully verified: save in profile & RTDB & mfa_store
       if (user) {

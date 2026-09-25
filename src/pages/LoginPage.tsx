@@ -19,6 +19,7 @@ import {
   Smartphone,
 } from "lucide-react";
 import { loginUser, loginWithOtp, loginWithMfa, isConfiguredAdminEmail } from "../firebase/auth";
+import { apiClient } from "../services/apiClient";
 
 export default function LoginPage() {
   const navigate = useNavigate();
@@ -89,16 +90,8 @@ export default function LoginPage() {
 
     setIsSendingResetOtp(true);
     try {
-      const response = await fetch("http://localhost:8000/api/auth/send-otp", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email: clean }),
-      });
-      if (response.ok) {
-        navigate(`/forgot-password?email=${encodeURIComponent(clean)}&sent=1`);
-      } else {
-        navigate(`/forgot-password?email=${encodeURIComponent(clean)}`);
-      }
+      await apiClient.sendOtp(clean);
+      navigate(`/forgot-password?email=${encodeURIComponent(clean)}&sent=1`);
     } catch {
       navigate(`/forgot-password?email=${encodeURIComponent(clean)}`);
     } finally {
@@ -119,22 +112,12 @@ export default function LoginPage() {
 
     setIsLoading(true);
     try {
-      const response = await fetch("http://localhost:8000/api/auth/send-otp", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email: targetEmail }),
-      });
-
-      const data = await response.json();
-      if (!response.ok) {
-        throw new Error(data.detail || "Unable to send verification OTP.");
-      }
-
+      const res = await apiClient.sendOtp(targetEmail);
       setOtpSent(true);
       setOtpCooldown(300); // 5 min countdown
-      setSuccessMsg(`A 6-digit verification code was dispatched to ${targetEmail}`);
+      setSuccessMsg(res.message || `A 6-digit verification code was dispatched to ${targetEmail}`);
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : "SMTP service error. Check backend connection.";
+      const msg = err instanceof Error ? err.message : "Unable to connect to Grid Guard server. Please try again.";
       setError(msg);
     } finally {
       setIsLoading(false);

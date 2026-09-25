@@ -17,6 +17,7 @@ import {
   ArrowLeft,
 } from "lucide-react";
 import { resetPasswordWithOtp } from "../firebase/auth";
+import { apiClient } from "../services/apiClient";
 
 export default function ForgotPasswordPage() {
   const navigate = useNavigate();
@@ -62,22 +63,12 @@ export default function ForgotPasswordPage() {
 
     setIsLoading(true);
     try {
-      const response = await fetch("http://localhost:8000/api/auth/send-otp", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email: targetEmail }),
-      });
-
-      const data = await response.json();
-      if (!response.ok) {
-        throw new Error(data.detail || "Unable to dispatch password reset code.");
-      }
-
+      const res = await apiClient.sendOtp(targetEmail);
       setStep(2);
       setCooldown(300); // 5 minutes
-      setSuccessMsg(`A 6-digit password reset OTP has been sent to ${targetEmail}`);
+      setSuccessMsg(res.message || `A 6-digit password reset OTP has been sent to ${targetEmail}`);
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : "SMTP service error. Check backend connection.";
+      const msg = err instanceof Error ? err.message : "Unable to connect to Grid Guard server. Please try again.";
       setError(msg);
     } finally {
       setIsLoading(false);

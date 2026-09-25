@@ -17,6 +17,7 @@ import {
 } from "lucide-react";
 import { rtdbService } from "../../firebase/database";
 import { presenceService } from "../../services/presenceService";
+import { apiClient } from "../../services/apiClient";
 import type { UserProfile, UserRole, UserAccountStatus } from "../../types/user";
 
 export default function AdminMembers() {
@@ -80,15 +81,11 @@ export default function AdminMembers() {
       await rtdbService.logAuditEvent("ADMIN_CREATE_MEMBER", cleanEmail, { role: newRole, status: newStatus });
 
       // Dispatch onboarding email via backend
-      const backendUrl = import.meta.env.VITE_BACKEND_API_URL || "http://localhost:8000";
-      await fetch(`${backendUrl}/api/admin/send-email`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          recipients: [cleanEmail],
-          subject: "Welcome to Grid Guard Solar Monitoring Platform",
-          message: `Hello ${newName},\n\nYour operator account on Grid Guard Solar Monitoring has been provisioned with the role of [${newRole.toUpperCase()}].\n\nYou can sign in to the platform using your email: ${cleanEmail}.\n\nAccess the portal: http://localhost:5174/login\n\nBest regards,\nGrid Guard Operations Team`,
-        }),
+      const loginUrl = `${window.location.origin}/login`;
+      await apiClient.sendEmail({
+        recipients: [cleanEmail],
+        subject: "Welcome to Grid Guard Solar Monitoring Platform",
+        message: `Hello ${newName},\n\nYour operator account on Grid Guard Solar Monitoring has been provisioned with the role of [${newRole.toUpperCase()}].\n\nYou can sign in to the platform using your email: ${cleanEmail}.\n\nAccess the portal: ${loginUrl}\n\nBest regards,\nGrid Guard Operations Team`,
       });
 
       setAddMsg("Member created successfully and invitation email dispatched!");
@@ -136,20 +133,11 @@ export default function AdminMembers() {
     setEmailStatus("");
 
     try {
-      const backendUrl = import.meta.env.VITE_BACKEND_API_URL || "http://localhost:8000";
-      const res = await fetch(`${backendUrl}/api/admin/send-email`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          recipients: [selectedUserEmail],
-          subject: emailSubject,
-          message: emailMessage,
-        }),
+      await apiClient.sendEmail({
+        recipients: [selectedUserEmail],
+        subject: emailSubject,
+        message: emailMessage,
       });
-
-      if (!res.ok) {
-        throw new Error("Failed to send email. Check backend SMTP configuration.");
-      }
 
       setEmailStatus("Email dispatched successfully via Gmail SMTP!");
       setTimeout(() => {

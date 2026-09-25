@@ -29,13 +29,31 @@ app = FastAPI(
     version="2.0.0",
 )
 
-# CORS setup
+# CORS configuration (supports production Firebase Hosting and localhost dev)
+default_origins = [
+    "http://localhost:5173",
+    "http://localhost:5174",
+    "http://localhost:3000",
+    "http://127.0.0.1:5173",
+    "http://127.0.0.1:5174",
+    "http://127.0.0.1:3000",
+    "https://gridguardsolarmonitoring.web.app",
+    "https://gridguardsolarmonitoring.firebaseapp.com",
+]
+
+env_origins = os.getenv("ALLOWED_ORIGINS", "")
+if env_origins:
+    custom_origins = [o.strip() for o in env_origins.split(",") if o.strip()]
+    for origin in custom_origins:
+        if origin not in default_origins:
+            default_origins.append(origin)
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_origin_regex=r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$",
+    allow_origins=default_origins,
+    allow_origin_regex=r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$|^https:\/\/gridguardsolarmonitoring(-[a-z0-9]+)?\.(web\.app|firebaseapp\.com)$",
     allow_credentials=True,
-    allow_methods=["*"],
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["*"],
 )
 
@@ -712,5 +730,7 @@ def manual_rtdb_seed():
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("backend.app:app", host="127.0.0.1", port=8000, reload=True)
+    port = int(os.getenv("PORT", "8000"))
+    host = os.getenv("HOST", "0.0.0.0")
+    uvicorn.run("backend.app:app", host=host, port=port, reload=False)
 

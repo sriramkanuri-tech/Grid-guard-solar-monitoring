@@ -1,7 +1,6 @@
 import { rtdbService } from "../firebase/database";
+import { apiClient } from "./apiClient";
 import type { Alert } from "../types/alert";
-
-const BACKEND_URL = import.meta.env.VITE_BACKEND_API_URL || "http://localhost:8000";
 
 export const alertService = {
   /**
@@ -26,17 +25,15 @@ export const alertService = {
       alertData.severity === "critical"
     ) {
       try {
-        await fetch(`${BACKEND_URL}/api/alerts/telegram`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            message: alertData.message,
-            severity: "CRITICAL",
-            node_id: alertData.nodeId || "GG-NODE-01",
-          }),
+        await apiClient.sendTelegramAlert({
+          message: alertData.message,
+          severity: "CRITICAL",
+          node_id: alertData.nodeId || "GG-NODE-01",
         });
       } catch (err) {
-        console.warn("[Telegram Alert] Failed notifying backend:", err);
+        if (import.meta.env.DEV) {
+          console.warn("[Telegram Alert] Failed notifying backend:", err);
+        }
       }
     }
 

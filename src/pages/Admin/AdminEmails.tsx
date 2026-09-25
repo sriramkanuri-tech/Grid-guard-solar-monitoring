@@ -15,6 +15,7 @@ import {
 } from "lucide-react";
 import { rtdbService } from "../../firebase/database";
 import { getStoredUser } from "../../firebase/auth";
+import { apiClient } from "../../services/apiClient";
 import type { UserProfile } from "../../types/user";
 
 const EMAIL_TEMPLATES = [
@@ -162,21 +163,11 @@ export default function AdminEmails() {
     setSending(true);
 
     try {
-      const response = await fetch("http://localhost:8000/api/admin/send-email", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          recipients: targets,
-          subject: subject.trim(),
-          message: message.trim(),
-        }),
+      await apiClient.sendEmail({
+        recipients: targets,
+        subject: subject.trim(),
+        message: message.trim(),
       });
-
-      const data = await response.json();
-
-      if (!response.ok) {
-        throw new Error(data.detail || "Failed to dispatch email via SMTP.");
-      }
 
       // Log to RTDB Audit Trail
       await rtdbService.logAuditEvent(

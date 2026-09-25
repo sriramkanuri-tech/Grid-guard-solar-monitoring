@@ -10,6 +10,7 @@ import {
 import { auth } from "./config";
 import { rtdbService } from "./database";
 import { presenceManager } from "./presence";
+import { apiClient } from "../services/apiClient";
 import type { UserProfile } from "../types/user";
 
 export const LOCAL_STORAGE_USER_KEY = "gridguard_user";
@@ -179,27 +180,9 @@ export const loginWithOtp = async (
   otp: string
 ): Promise<UserProfile> => {
   const cleanEmail = email.trim().toLowerCase();
-  const backendUrl = import.meta.env.VITE_BACKEND_API_URL || "http://localhost:8000";
 
-  const response = await fetch(`${backendUrl}/api/auth/verify-otp`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ email: cleanEmail, otp }),
-  });
-
-  if (!response.ok) {
-    let errorDetail = "Invalid or expired OTP code.";
-    try {
-      const data = await response.json();
-      if (data.detail) errorDetail = data.detail;
-    } catch {
-      // ignore
-    }
-    throw new Error(errorDetail);
-  }
-
-  const result = await response.json();
-  const isAdmin = isConfiguredAdminEmail(cleanEmail) || result.isAdmin;
+  const result = await apiClient.verifyOtp(cleanEmail, otp.trim());
+  const isAdmin = isConfiguredAdminEmail(cleanEmail) || (result as any).isAdmin;
   const uid = "usr_" + cleanEmail.replace(/[^a-zA-Z0-9]/g, "_");
 
   // Fetch or create profile in RTDB
@@ -285,23 +268,7 @@ export const loginWithMfa = async (
   }
 
   // 2. Verify 6-digit TOTP code against Python FastAPI Auth Engine
-  const backendUrl = import.meta.env.VITE_BACKEND_API_URL || "http://localhost:8000";
-  const res = await fetch(`${backendUrl}/api/auth/mfa/verify`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ secret, code: code.trim() }),
-  });
-
-  if (!res.ok) {
-    let detail = "Invalid 6-digit authenticator code. Check your authenticator app and device clock.";
-    try {
-      const data = await res.json();
-      if (data.detail) detail = data.detail;
-    } catch {
-      // ignore
-    }
-    throw new Error(detail);
-  }
+  await apiClient.verifyMfa(secret, code.trim());
 
   // 3. TOTP Verified! Fetch or construct user profile
   let profile = await rtdbService.findUserProfileByEmail(cleanEmail);
@@ -360,25 +327,8 @@ export const resetPasswordWithOtp = async (
   newPass: string
 ): Promise<void> => {
   const cleanEmail = email.trim().toLowerCase();
-  const backendUrl = import.meta.env.VITE_BACKEND_API_URL || "http://localhost:8000";
-
   // Verify OTP with backend
-  const response = await fetch(`${backendUrl}/api/auth/verify-otp`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ email: cleanEmail, otp: otp.trim() }),
-  });
-
-  if (!response.ok) {
-    let errorDetail = "Invalid or expired verification code.";
-    try {
-      const data = await response.json();
-      if (data.detail) errorDetail = data.detail;
-    } catch {
-      // ignore
-    }
-    throw new Error(errorDetail);
-  }
+  await apiClient.verifyOtp(cleanEmail, otp.trim());
 
   // Update password in local account storage
   const savedAccountStr = localStorage.getItem(LOCAL_STORAGE_ACCOUNT_KEY);

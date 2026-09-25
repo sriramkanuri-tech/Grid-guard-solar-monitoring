@@ -1,4 +1,4 @@
-import { ML_API_URL } from "../config";
+import { apiClient, ApiError } from "./apiClient";
 import type {
   SolarReadingPayload,
   MLPredictionResponse,
@@ -11,29 +11,16 @@ export const mlService = {
    */
   async checkHealth(): Promise<MLHealthResponse> {
     try {
-      const response = await fetch(`${ML_API_URL}/`, {
-        method: "GET",
-        headers: {
-          Accept: "application/json",
-        },
-      });
-
-      if (!response.ok) {
-        throw new Error(
-          `ML server responded with HTTP status ${response.status}: ${response.statusText}`
-        );
-      }
-
-      const data = await response.json();
-      return data;
+      const data = await apiClient.checkHealth();
+      return {
+        message: `${data.service} is running`,
+        model: data.model || "Isolation Forest",
+      };
     } catch (err: unknown) {
-      if (err instanceof TypeError || (err as Error)?.message?.includes("Failed to fetch")) {
-        throw new Error(
-          "ML server is offline. Start the Grid Guard ML API on port 8000.",
-          { cause: err }
-        );
+      if (err instanceof ApiError) {
+        throw new Error(err.message);
       }
-      throw err;
+      throw new Error("Unable to connect to Grid Guard server. Please try again.");
     }
   },
 
@@ -43,43 +30,7 @@ export const mlService = {
    */
   async predict(payload: SolarReadingPayload): Promise<MLPredictionResponse> {
     try {
-      const response = await fetch(`${ML_API_URL}/predict`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Accept: "application/json",
-        },
-        body: JSON.stringify(payload),
-      });
-
-      if (!response.ok) {
-        let errorDetail = "";
-        try {
-          const errorData = await response.json();
-          if (errorData.detail) {
-            if (Array.isArray(errorData.detail)) {
-              errorDetail = errorData.detail
-                .map((d: { msg?: string; loc?: string[] }) => d.msg || JSON.stringify(d))
-                .join(", ");
-            } else {
-              errorDetail = String(errorData.detail);
-            }
-          }
-        } catch {
-          // ignore non-json error responses
-        }
-
-        throw new Error(
-          errorDetail ||
-            `ML server error: HTTP ${response.status} (${response.statusText})`
-        );
-      }
-
-      const data = await response.json();
-
-      if (!data || typeof data.prediction === "undefined" || !data.status) {
-        throw new Error("Invalid API response received from ML server.");
-      }
+      const data = await apiClient.predictAnomaly(payload);
 
       return {
         status: data.status,
@@ -88,15 +39,13 @@ export const mlService = {
         message: data.message,
         model: "Isolation Forest",
         timestamp: new Date().toLocaleTimeString(),
+        is_anomaly: data.is_anomaly,
       };
     } catch (err: unknown) {
-      if (err instanceof TypeError || (err as Error)?.message?.includes("Failed to fetch")) {
-        throw new Error(
-          "ML server is offline. Start the Grid Guard ML API on port 8000.",
-          { cause: err }
-        );
+      if (err instanceof ApiError) {
+        throw new Error(err.message);
       }
-      throw err;
+      throw new Error("Unable to connect to Grid Guard server. Please try again.");
     }
   },
 };
