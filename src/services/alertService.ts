@@ -1,75 +1,59 @@
-import {
-  subscribeToAlertsFirestore,
-  addAlertFirestore,
-  resolveAlertFirestore,
-} from "../firebase/firestore";
-import { isFirebaseConfigured } from "../firebase/config";
-import { demoDataService } from "./demoDataService";
+import { rtdbService } from "../firebase/database";
 import type { Alert } from "../types/alert";
 
+const BACKEND_URL = import.meta.env.VITE_BACKEND_API_URL || "http://localhost:8000";
+
 export const alertService = {
+  /**
+   * Subscribes to live alerts from Firebase Realtime Database
+   */
   subscribe: (callback: (alerts: Alert[]) => void): (() => void) => {
-    let unsubscribeFirestore: (() => void) | null = null;
-    let unsubscribeDemo: (() => void) | null = null;
-    let hasFirebaseAlerts = false;
-
-    if (isFirebaseConfigured) {
-      unsubscribeFirestore = subscribeToAlertsFirestore(
-        (alerts) => {
-          if (alerts && alerts.length > 0) {
-            hasFirebaseAlerts = true;
-            if (unsubscribeDemo) {
-              unsubscribeDemo();
-              unsubscribeDemo = null;
-            }
-            callback(alerts);
-          } else if (!hasFirebaseAlerts) {
-            if (!unsubscribeDemo) {
-              unsubscribeDemo = demoDataService.subscribeAlerts(callback);
-            }
-          }
-        },
-        () => {
-          if (!unsubscribeDemo) {
-            unsubscribeDemo = demoDataService.subscribeAlerts(callback);
-          }
-        }
-      );
-    } else {
-      unsubscribeDemo = demoDataService.subscribeAlerts(callback);
-    }
-
-    return () => {
-      if (unsubscribeFirestore) unsubscribeFirestore();
-      if (unsubscribeDemo) unsubscribeDemo();
-    };
+    return rtdbService.subscribeToAlerts((alerts) => {
+      callback(alerts);
+    });
   },
 
   /**
-   * Generates a new alert when a metric threshold is breached.
-   * Does NOT use Telegram bot tokens in frontend; saves directly to Firestore or local demo state.
+   * Creates an alert in Realtime Database.
+   * If severity is CRITICAL, triggers backend Telegram notification service.
    */
-  createAlert: async (alertData: Omit<Alert, "id">): Promise<void> => {
-    if (isFirebaseConfigured) {
+  createAlert: async (alertData: Omit<Alert, "id">): Promise<string> => {
+    const alertId = await rtdbService.createAlert(alertData);
+
+    // If critical alert, dispatch Telegram notification via backend
+    if (
+      String(alertData.severity).toUpperCase() === "CRITICAL" ||
+      alertData.severity === "critical"
+    ) {
       try {
-        await addAlertFirestore(alertData);
-        return;
+        await fetch(`${BACKEND_URL}/api/alerts/telegram`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            message: alertData.message,
+            severity: "CRITICAL",
+            node_id: alertData.nodeId || "GG-NODE-01",
+          }),
+        });
       } catch (err) {
-        console.warn("Could not save alert to Firestore, adding to local state:", err);
+        console.warn("[Telegram Alert] Failed notifying backend:", err);
       }
     }
-    demoDataService.addAlert(alertData);
+
+    return alertId;
   },
 
+  /**
+   * Acknowledges an alert in Firebase Realtime Database
+   */
+  acknowledgeAlert: async (alertId: string, userEmail: string): Promise<void> => {
+    await rtdbService.acknowledgeAlert(alertId, userEmail);
+  },
+
+  /**
+   * Resolves an alert in Firebase Realtime Database
+   */
   resolveAlert: async (alertId: string): Promise<void> => {
-    if (isFirebaseConfigured && !alertId.startsWith("alt-")) {
-      try {
-        await resolveAlertFirestore(alertId);
-        return;
-      } catch (err) {
-        console.warn("Could not resolve alert in Firestore:", err);
-      }
-    }
-    demoDataService.resolveAlert(alertId);
+    await rtdbService.resolveAlert(alertId);
   },
 };

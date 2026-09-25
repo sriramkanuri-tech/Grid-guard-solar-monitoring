@@ -4,9 +4,11 @@ import PageHeader from "../../components/PageHeader";
 import StatCard from "../../components/StatCard";
 import ChartCard from "../../components/ChartCard";
 import StatusBadge from "../../components/StatusBadge";
+import LiveDatabaseFeed from "../../components/LiveDatabaseFeed";
 import { gridDataService } from "../../services/gridDataService";
 import { demoDataService } from "../../services/demoDataService";
 import type { GridData, GridHistoryPoint } from "../../types/grid";
+import { Plug, Zap, Activity, Target, ShieldCheck } from "lucide-react";
 
 export default function GridMonitoring() {
   const [grid, setGrid] = useState<GridData>(gridDataService.getInitialData());
@@ -45,20 +47,25 @@ export default function GridMonitoring() {
       <PageHeader
         title="Grid Telemetry & Stability"
         subtitle="Real-time electrical parameters, frequency sync, power factor, and islanding protection"
-        category="Grid Monitoring"
+        category="Grid Protection"
         isDemo={Boolean(grid.isDemo)}
-        action={<StatusBadge status={grid.systemStatus === "online" ? "stable" : grid.systemStatus} label={gridStatusText} />}
+        action={
+          <StatusBadge
+            status={grid.systemStatus === "online" ? "stable" : grid.systemStatus}
+            label={gridStatusText}
+          />
+        }
       />
 
       {/* Primary Electrical Parameters */}
-      <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
+      <section className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-5 gap-4">
         <StatCard
           title="Grid Voltage"
           value={grid.gridVoltage}
           decimals={1}
           unit="V"
           change="Standard: 230V ± 5%"
-          icon="🔌"
+          icon={<Plug size={20} />}
         />
 
         <StatCard
@@ -66,8 +73,8 @@ export default function GridMonitoring() {
           value={grid.gridCurrent || 12.4}
           decimals={1}
           unit="A"
-          change="Balanced continuous draw"
-          icon="⚡"
+          change="Balanced continuous load"
+          icon={<Zap size={20} />}
         />
 
         <StatCard
@@ -75,8 +82,8 @@ export default function GridMonitoring() {
           value={grid.gridFrequency || 50.02}
           decimals={2}
           unit="Hz"
-          change="Nominal: 50.00 Hz"
-          icon="〰️"
+          change="Utility sync lock 50.00 Hz"
+          icon={<Activity size={20} />}
         />
 
         <StatCard
@@ -84,35 +91,35 @@ export default function GridMonitoring() {
           value={grid.powerFactor || 0.96}
           decimals={2}
           unit=""
-          change="Near unity (target > 0.95)"
-          icon="🎯"
+          change="Target: > 0.95 near unity"
+          icon={<Target size={20} />}
         />
 
-        <div className="stat-card animate-item rounded-2xl border border-slate-800 bg-slate-900/80 p-5 transition hover:border-lime-400/30">
-          <p className="text-sm text-slate-400">Grid Status</p>
-          <div className="mt-3 flex items-center gap-3">
+        <div className="rounded-2xl border border-slate-800/80 bg-[#0B1628]/75 p-5 shadow-lg backdrop-blur-xl transition hover:border-lime-400/30 hover:bg-[#101D32]/80">
+          <p className="text-xs font-semibold uppercase tracking-wider text-slate-400">Interlock State</p>
+          <div className="mt-2.5 flex items-center gap-2.5">
             <span
-              className={`h-3 w-3 rounded-full ${
+              className={`h-2.5 w-2.5 rounded-full ${
                 gridStatusText === "Stable"
                   ? "bg-lime-400 animate-pulse"
                   : gridStatusText === "Warning"
-                  ? "bg-orange-400 animate-pulse"
-                  : "bg-rose-500 animate-pulse"
+                  ? "bg-amber-400 animate-pulse"
+                  : "bg-red-400 animate-pulse"
               }`}
             />
             <span
-              className={`text-2xl font-bold ${
+              className={`text-2xl font-bold font-mono tracking-tight ${
                 gridStatusText === "Stable"
                   ? "text-lime-400"
                   : gridStatusText === "Warning"
-                  ? "text-orange-400"
-                  : "text-rose-400"
+                  ? "text-amber-400"
+                  : "text-red-400"
               }`}
             >
               {gridStatusText}
             </span>
           </div>
-          <p className="mt-3 text-xs text-slate-500">Anti-islanding sync locked</p>
+          <p className="mt-2 text-[11px] text-slate-400">Anti-islanding sync locked</p>
         </div>
       </section>
 
@@ -120,23 +127,23 @@ export default function GridMonitoring() {
       <section className="mt-8 grid gap-6 lg:grid-cols-3">
         {/* Voltage History */}
         <ChartCard
-          title="Voltage History"
-          subtitle="Phase A nominal voltage tolerance"
+          title="Voltage Tolerance"
+          subtitle="Phase A nominal voltage variance"
           badge="V"
         >
-          <div className="flex h-48 items-end gap-2 sm:gap-3 pt-4">
+          <div className="flex h-48 items-end gap-2 sm:gap-2.5 pt-4">
             {history.map((pt, idx) => {
               const heightPercent = ((pt.voltage - 227) / 8) * 100;
               return (
                 <div key={idx} className="flex h-full flex-1 flex-col items-center justify-end">
-                  <span className="mb-1 text-[10px] text-lime-400 font-semibold">
+                  <span className="mb-1 text-[9px] sm:text-[10px] text-lime-400 font-mono font-semibold">
                     {pt.voltage}
                   </span>
                   <div
-                    className="w-full rounded-t-md bg-lime-400/80 transition-all duration-300 hover:bg-lime-400"
+                    className="w-full rounded-t-md bg-gradient-to-t from-lime-500/30 to-lime-400 transition-all duration-300 hover:brightness-125"
                     style={{ height: `${Math.min(95, Math.max(15, heightPercent))}%` }}
                   />
-                  <span className="mt-2 text-[9px] text-slate-500">{pt.time}</span>
+                  <span className="mt-2 text-[8px] sm:text-[9px] font-mono text-slate-500">{pt.time}</span>
                 </div>
               );
             })}
@@ -145,23 +152,23 @@ export default function GridMonitoring() {
 
         {/* Frequency History */}
         <ChartCard
-          title="Frequency History"
-          subtitle="Microgrid synchronization tracking"
+          title="Frequency Sync"
+          subtitle="Harmonic utility tracking (Hz)"
           badge="Hz"
         >
-          <div className="flex h-48 items-end gap-2 sm:gap-3 pt-4">
+          <div className="flex h-48 items-end gap-2 sm:gap-2.5 pt-4">
             {history.map((pt, idx) => {
               const heightPercent = ((pt.frequency - 49.9) / 0.2) * 100;
               return (
                 <div key={idx} className="flex h-full flex-1 flex-col items-center justify-end">
-                  <span className="mb-1 text-[10px] text-sky-400 font-semibold">
+                  <span className="mb-1 text-[9px] sm:text-[10px] text-sky-400 font-mono font-semibold">
                     {pt.frequency}
                   </span>
                   <div
-                    className="w-full rounded-t-md bg-sky-400/80 transition-all duration-300 hover:bg-sky-400"
+                    className="w-full rounded-t-md bg-gradient-to-t from-sky-500/30 to-sky-400 transition-all duration-300 hover:brightness-125"
                     style={{ height: `${Math.min(95, Math.max(15, heightPercent))}%` }}
                   />
-                  <span className="mt-2 text-[9px] text-slate-500">{pt.time}</span>
+                  <span className="mt-2 text-[8px] sm:text-[9px] font-mono text-slate-500">{pt.time}</span>
                 </div>
               );
             })}
@@ -170,23 +177,23 @@ export default function GridMonitoring() {
 
         {/* Power Factor History */}
         <ChartCard
-          title="Power Factor History"
+          title="Power Factor Profile"
           subtitle="Reactive impedance compensation"
           badge="cos(φ)"
         >
-          <div className="flex h-48 items-end gap-2 sm:gap-3 pt-4">
+          <div className="flex h-48 items-end gap-2 sm:gap-2.5 pt-4">
             {history.map((pt, idx) => {
               const heightPercent = ((pt.powerFactor - 0.92) / 0.08) * 100;
               return (
                 <div key={idx} className="flex h-full flex-1 flex-col items-center justify-end">
-                  <span className="mb-1 text-[10px] text-amber-400 font-semibold">
+                  <span className="mb-1 text-[9px] sm:text-[10px] text-amber-400 font-mono font-semibold">
                     {pt.powerFactor}
                   </span>
                   <div
-                    className="w-full rounded-t-md bg-amber-400/80 transition-all duration-300 hover:bg-amber-400"
+                    className="w-full rounded-t-md bg-gradient-to-t from-amber-500/30 to-amber-400 transition-all duration-300 hover:brightness-125"
                     style={{ height: `${Math.min(95, Math.max(15, heightPercent))}%` }}
                   />
-                  <span className="mt-2 text-[9px] text-slate-500">{pt.time}</span>
+                  <span className="mt-2 text-[8px] sm:text-[9px] font-mono text-slate-500">{pt.time}</span>
                 </div>
               );
             })}
@@ -195,13 +202,22 @@ export default function GridMonitoring() {
       </section>
 
       {/* Grid Protection Protection Status Table */}
-      <section className="mt-8 rounded-2xl border border-slate-800 bg-slate-900/80 p-6">
-        <h2 className="text-lg font-semibold text-white">Grid Interconnection & Safety Checks</h2>
-        <p className="mt-1 text-xs text-slate-500">Compliance with IEEE 1547 / IEC 62116 standard grid interconnection</p>
+      <section className="mt-8 rounded-2xl border border-slate-800/80 bg-[#0B1628]/80 p-6 shadow-xl backdrop-blur-xl">
+        <div className="flex items-center gap-2 border-b border-slate-800/60 pb-4 mb-4">
+          <ShieldCheck size={20} className="text-lime-400" />
+          <div>
+            <h2 className="text-base sm:text-lg font-bold tracking-tight text-white">
+              Grid Interconnection &amp; Compliance Verifications
+            </h2>
+            <p className="mt-0.5 text-xs text-slate-400">
+              Compliant with IEEE 1547 and IEC 62116 anti-islanding standards
+            </p>
+          </div>
+        </div>
 
-        <div className="mt-6 overflow-x-auto">
-          <table className="w-full text-left text-sm text-slate-300">
-            <thead className="border-b border-slate-800 text-xs uppercase tracking-wider text-slate-500">
+        <div className="overflow-x-auto">
+          <table className="w-full text-left text-xs text-slate-300 font-mono">
+            <thead className="border-b border-slate-800 text-[10px] uppercase font-bold tracking-wider text-slate-500">
               <tr>
                 <th className="py-3 px-4">Protection Zone</th>
                 <th className="py-3 px-4">Monitored Parameter</th>
@@ -210,38 +226,59 @@ export default function GridMonitoring() {
                 <th className="py-3 px-4">Interlock Status</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-slate-800/60 text-xs">
+            <tbody className="divide-y divide-slate-800/60">
               <tr>
-                <td className="py-3.5 px-4 font-medium text-white">Over-Voltage (OVP)</td>
-                <td className="py-3.5 px-4">Phase-to-Neutral AC</td>
-                <td className="py-3.5 px-4">&gt; 253.0 V</td>
-                <td className="py-3.5 px-4 text-lime-400">{grid.gridVoltage} V</td>
-                <td className="py-3.5 px-4"><span className="rounded-full bg-lime-400/10 px-2.5 py-1 text-lime-400 font-medium">Safe</span></td>
+                <td className="py-3.5 px-4 font-semibold text-white font-sans">Over-Voltage (OVP)</td>
+                <td className="py-3.5 px-4 font-sans text-slate-400">Phase-to-Neutral AC</td>
+                <td className="py-3.5 px-4 text-amber-400">&gt; 253.0 V</td>
+                <td className="py-3.5 px-4 text-lime-400 font-bold">{grid.gridVoltage} V</td>
+                <td className="py-3.5 px-4 font-sans">
+                  <span className="rounded-full border border-lime-400/30 bg-lime-400/10 px-2.5 py-0.5 text-[11px] text-lime-400 font-bold">
+                    Safe
+                  </span>
+                </td>
               </tr>
               <tr>
-                <td className="py-3.5 px-4 font-medium text-white">Under-Voltage (UVP)</td>
-                <td className="py-3.5 px-4">Phase-to-Neutral AC</td>
-                <td className="py-3.5 px-4">&lt; 195.5 V</td>
-                <td className="py-3.5 px-4 text-lime-400">{grid.gridVoltage} V</td>
-                <td className="py-3.5 px-4"><span className="rounded-full bg-lime-400/10 px-2.5 py-1 text-lime-400 font-medium">Safe</span></td>
+                <td className="py-3.5 px-4 font-semibold text-white font-sans">Under-Voltage (UVP)</td>
+                <td className="py-3.5 px-4 font-sans text-slate-400">Phase-to-Neutral AC</td>
+                <td className="py-3.5 px-4 text-amber-400">&lt; 195.5 V</td>
+                <td className="py-3.5 px-4 text-lime-400 font-bold">{grid.gridVoltage} V</td>
+                <td className="py-3.5 px-4 font-sans">
+                  <span className="rounded-full border border-lime-400/30 bg-lime-400/10 px-2.5 py-0.5 text-[11px] text-lime-400 font-bold">
+                    Safe
+                  </span>
+                </td>
               </tr>
               <tr>
-                <td className="py-3.5 px-4 font-medium text-white">Over-Frequency (OFP)</td>
-                <td className="py-3.5 px-4">Utility Sine Frequency</td>
-                <td className="py-3.5 px-4">&gt; 51.50 Hz</td>
-                <td className="py-3.5 px-4 text-lime-400">{grid.gridFrequency || 50.02} Hz</td>
-                <td className="py-3.5 px-4"><span className="rounded-full bg-lime-400/10 px-2.5 py-1 text-lime-400 font-medium">Locked</span></td>
+                <td className="py-3.5 px-4 font-semibold text-white font-sans">Over-Frequency (OFP)</td>
+                <td className="py-3.5 px-4 font-sans text-slate-400">Utility Sine Frequency</td>
+                <td className="py-3.5 px-4 text-amber-400">&gt; 51.50 Hz</td>
+                <td className="py-3.5 px-4 text-lime-400 font-bold">{grid.gridFrequency || 50.02} Hz</td>
+                <td className="py-3.5 px-4 font-sans">
+                  <span className="rounded-full border border-lime-400/30 bg-lime-400/10 px-2.5 py-0.5 text-[11px] text-lime-400 font-bold">
+                    Locked
+                  </span>
+                </td>
               </tr>
               <tr>
-                <td className="py-3.5 px-4 font-medium text-white">Anti-Islanding Relay</td>
-                <td className="py-3.5 px-4">Active Frequency Drift</td>
-                <td className="py-3.5 px-4">ROCOF &gt; 1.5 Hz/s</td>
-                <td className="py-3.5 px-4 text-lime-400">0.02 Hz/s</td>
-                <td className="py-3.5 px-4"><span className="rounded-full bg-lime-400/10 px-2.5 py-1 text-lime-400 font-medium">Synced</span></td>
+                <td className="py-3.5 px-4 font-semibold text-white font-sans">Anti-Islanding Relay</td>
+                <td className="py-3.5 px-4 font-sans text-slate-400">Active Frequency Drift</td>
+                <td className="py-3.5 px-4 text-amber-400">ROCOF &gt; 1.5 Hz/s</td>
+                <td className="py-3.5 px-4 text-lime-400 font-bold">0.02 Hz/s</td>
+                <td className="py-3.5 px-4 font-sans">
+                  <span className="rounded-full border border-lime-400/30 bg-lime-400/10 px-2.5 py-0.5 text-[11px] text-lime-400 font-bold">
+                    Synced
+                  </span>
+                </td>
               </tr>
             </tbody>
           </table>
         </div>
+      </section>
+
+      {/* Real-Time Database Telemetry Stream */}
+      <section className="mt-8">
+        <LiveDatabaseFeed maxRows={6} />
       </section>
     </AnimatedPage>
   );

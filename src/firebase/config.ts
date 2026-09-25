@@ -1,22 +1,32 @@
-import { initializeApp, getApps, getApp } from "firebase/app";
-import { getAuth } from "firebase/auth";
-import { getFirestore } from "firebase/firestore";
+import {
+  initializeApp,
+  getApps,
+  getApp,
+  type FirebaseApp,
+  type FirebaseOptions,
+} from "firebase/app";
+import { getAuth, type Auth } from "firebase/auth";
+import { getFirestore, type Firestore } from "firebase/firestore";
+import { getDatabase, type Database } from "firebase/database";
 
-const firebaseConfig = {
-  apiKey: import.meta.env.VITE_FIREBASE_API_KEY || "AIzaSyDemoKeyMock1234567890abcdef",
-  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN || "gridguard-solar.firebaseapp.com",
-  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID || "gridguard-solar",
-  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET || "gridguard-solar.appspot.com",
-  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID || "1234567890",
-  appId: import.meta.env.VITE_FIREBASE_APP_ID || "1:1234567890:web:abcdef123456",
+const firebaseConfig: FirebaseOptions = {
+  apiKey: import.meta.env.VITE_FIREBASE_API_KEY || "AIzaSyDummyKeyForGridGuardLiveClient",
+  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN || "gridguardsolarmonitoring.firebaseapp.com",
+  databaseURL: import.meta.env.VITE_FIREBASE_DATABASE_URL || "https://gridguardsolarmonitoring-default-rtdb.firebaseio.com",
+  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID || "gridguardsolarmonitoring",
+  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET || "gridguardsolarmonitoring.firebasestorage.app",
+  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID || "100000000000",
+  appId: import.meta.env.VITE_FIREBASE_APP_ID || "1:100000000000:web:dummygridguardapp",
 };
 
-export const isFirebaseConfigured = Boolean(
-  import.meta.env.VITE_FIREBASE_API_KEY &&
-    !import.meta.env.VITE_FIREBASE_API_KEY.includes("Demo")
-);
+export const isFirebaseConfigured = true;
 
-// Prevent duplicate initialization
-export const app = getApps().length > 0 ? getApp() : initializeApp(firebaseConfig);
-export const auth = getAuth(app);
-export const db = getFirestore(app);
+const firebaseApp: FirebaseApp = getApps().length > 0
+  ? getApp()
+  : initializeApp(firebaseConfig);
+
+export const app: FirebaseApp = firebaseApp;
+export const auth: Auth = getAuth(firebaseApp);
+export const rtdb: Database = getDatabase(firebaseApp, firebaseConfig.databaseURL);
+export const db: Firestore = getFirestore(firebaseApp);
+export const databaseURL = firebaseConfig.databaseURL;

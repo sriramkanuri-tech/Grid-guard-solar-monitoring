@@ -18,7 +18,7 @@ export const MetricCard: React.FC<MetricCardProps> = ({
   unit,
   description,
   percentage,
-  valueClass = "text-white",
+  valueClass = "text-slate-50",
   className = "",
 }) => {
   const numericVal = typeof value === "number" ? value : parseFloat(value);
@@ -26,32 +26,37 @@ export const MetricCard: React.FC<MetricCardProps> = ({
 
   return (
     <div
-      className={`animate-item rounded-2xl border border-slate-800 bg-slate-900/80 p-6 transition hover:border-slate-700 ${className}`}
+      className={`group rounded-2xl border border-slate-800/80 bg-[#0B1628]/75 p-5 sm:p-6 shadow-lg backdrop-blur-xl transition-all duration-300 hover:-translate-y-0.5 hover:border-lime-400/30 hover:bg-[#101D32]/80 ${className}`}
     >
-      <p className="text-sm text-slate-400">{title}</p>
-      <div className="mt-2 flex items-baseline gap-2">
-        <span className={`text-3xl font-bold ${valueClass}`}>
+      <p className="text-xs font-semibold uppercase tracking-wider text-slate-400">
+        {title}
+      </p>
+
+      <div className="mt-2.5 flex items-baseline gap-1.5">
+        <span className={`text-2xl sm:text-3xl font-bold tracking-tight font-mono ${valueClass}`}>
           {isNumber ? <AnimatedNumber value={numericVal} /> : value}
         </span>
-        {unit && <span className="text-sm text-slate-500">{unit}</span>}
+        {unit && <span className="text-xs font-medium text-slate-400">{unit}</span>}
       </div>
 
       {percentage !== undefined && (
         <div className="mt-4">
           <div className="flex justify-between text-xs text-slate-400 mb-1.5">
-            <span>Capacity / Rating</span>
-            <span className="text-lime-400 font-medium">{percentage}%</span>
+            <span>Operating Capacity</span>
+            <span className="text-lime-400 font-mono font-semibold">{percentage}%</span>
           </div>
-          <div className="h-1.5 w-full rounded-full bg-slate-800 overflow-hidden">
+          <div className="h-1.5 w-full rounded-full bg-slate-800/90 overflow-hidden">
             <div
-              className="h-full rounded-full bg-lime-400 transition-all duration-500"
+              className="h-full rounded-full bg-gradient-to-r from-lime-500 to-emerald-400 transition-all duration-500"
               style={{ width: `${Math.min(100, Math.max(0, percentage))}%` }}
             />
           </div>
         </div>
       )}
 
-      {description && <p className="mt-3 text-xs text-slate-500">{description}</p>}
+      {description && (
+        <p className="mt-3 text-[11px] text-slate-400 leading-relaxed">{description}</p>
+      )}
     </div>
   );
 };

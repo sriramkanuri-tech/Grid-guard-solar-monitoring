@@ -5,7 +5,18 @@ import PageHeader from "../../components/PageHeader";
 import SensorCard from "../../components/SensorCard";
 import { sensorService } from "../../services/sensorService";
 import type { SensorData, SensorConnectionType } from "../../types/sensor";
-import { Radio, Plus, Check, AlertCircle, WifiOff } from "lucide-react";
+import {
+  Radio,
+  Plus,
+  Check,
+  AlertCircle,
+  Wifi,
+  Terminal,
+  Zap,
+  Activity,
+  Layers,
+  Database,
+} from "lucide-react";
 
 export default function ConnectSensor() {
   const [sensors, setSensors] = useState<SensorData[]>([]);
@@ -14,6 +25,7 @@ export default function ConnectSensor() {
   const [connectionType, setConnectionType] = useState<SensorConnectionType>("ESP32");
   const [endpoint, setEndpoint] = useState("");
   const [room, setRoom] = useState("");
+  const [ratedPower, setRatedPower] = useState("2.8");
   const [statusMsg, setStatusMsg] = useState<{ type: "success" | "error"; text: string } | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
@@ -24,6 +36,8 @@ export default function ConnectSensor() {
     return () => unsub();
   }, []);
 
+  const totalSensorsPower = sensors.reduce((acc, s) => acc + (s.power ?? s.ratedPower ?? 2.5), 0);
+
   const handleAddSensor = async (e: FormEvent) => {
     e.preventDefault();
     if (!sensorName.trim()) {
@@ -31,28 +45,35 @@ export default function ConnectSensor() {
       return;
     }
 
+    const powerNum = parseFloat(ratedPower) || 2.5;
+
     setIsSubmitting(true);
     try {
-      await sensorService.addSensor({
+      const newSensor = await sensorService.addSensor({
         name: sensorName.trim(),
         room: room.trim() || "Main Inverter Shed",
         connectionType,
         endpoint: endpoint.trim() || "192.168.1.130:8080",
-        temperature: 28.5,
+        ratedPower: powerNum,
+        power: powerNum,
+        voltage: 231.0,
+        current: Math.round(((powerNum * 1000) / 231.0) * 10) / 10,
+        temperature: 33.5,
         humidity: 60,
-        pressure: 1008,
+        pressure: 1012,
         status: "normal",
       });
 
       setStatusMsg({
         type: "success",
-        text: `Sensor "${sensorName}" configured successfully in Demo Mode!`,
+        text: `Sensor "${newSensor.name}" successfully provisioned and synchronized to Firebase RTDB! Generation has updated.`,
       });
 
       setSensorId("");
       setSensorName("");
       setEndpoint("");
       setRoom("");
+      setRatedPower("2.8");
     } catch {
       setStatusMsg({ type: "error", text: "Failed to configure sensor." });
     } finally {
@@ -63,35 +84,38 @@ export default function ConnectSensor() {
   return (
     <AnimatedPage>
       <PageHeader
-        title="Connect Sensor"
-        subtitle="Manage edge microcontrollers, IoT gateways, and environmental telemetry nodes"
-        category="Connect Sensor"
-        isDemo={true}
+        title="Connect Telemetry Node"
+        subtitle="Provision physical microcontrollers, edge IoT gateways, and environmental sensor pods"
+        category="Hardware Interfacing"
       />
 
       {/* Sensor Connection Status Banner */}
-      <section className="animate-item rounded-2xl border border-amber-500/30 bg-amber-500/10 p-6">
+      <section className="animate-item rounded-2xl border border-emerald-500/30 bg-emerald-500/10 p-5 sm:p-6 shadow-lg backdrop-blur-xl">
         <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
           <div className="flex items-center gap-4">
-            <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-amber-500/20 text-amber-400">
-              <WifiOff size={24} />
+            <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl border border-emerald-400/30 bg-emerald-400/20 text-emerald-400">
+              <Wifi size={22} />
             </div>
             <div>
               <div className="flex items-center gap-2">
-                <span className="h-2 w-2 rounded-full bg-amber-400 animate-pulse" />
-                <h2 className="text-base font-bold text-white">
-                  Sensor Connection Status: No physical sensor connected
+                <span className="h-2.5 w-2.5 rounded-full bg-emerald-400 animate-ping" />
+                <h2 className="text-base font-bold text-white tracking-tight">
+                  Hardware Telemetry: {sensors.length} Active Sensor{sensors.length === 1 ? "" : "s"} Connected
                 </h2>
               </div>
-              <p className="mt-1 text-xs text-amber-200/80">
-                Demo Mode Active — The application is currently receiving synthetic telemetry.
-                Configure a hardware node below to prepare for physical integration.
+              <p className="mt-1 text-xs text-emerald-200/90 leading-relaxed">
+                Live Firebase Realtime Database Stream Active — Every connected sensor contributes to the microgrid generation yield and updates the live cloud database every second.
               </p>
             </div>
           </div>
 
-          <div className="rounded-xl border border-amber-400/30 bg-amber-400/20 px-3.5 py-1.5 text-xs font-semibold text-amber-300">
-            Demo Mode Active
+          <div className="flex items-center gap-3">
+            <div className="rounded-xl border border-lime-400/30 bg-lime-400/20 px-3.5 py-1.5 text-xs font-mono font-bold text-lime-300">
+              {totalSensorsPower.toFixed(2)} kW ACTIVE YIELD
+            </div>
+            <div className="hidden sm:block rounded-xl border border-emerald-400/30 bg-emerald-400/20 px-3.5 py-1.5 text-xs font-mono font-bold text-emerald-300">
+              RTDB SYNC
+            </div>
           </div>
         </div>
       </section>
@@ -99,96 +123,103 @@ export default function ConnectSensor() {
       {/* Main Grid: Form & List */}
       <section className="mt-8 grid gap-8 lg:grid-cols-3">
         {/* Sensor Configuration Form */}
-        <div className="animate-item rounded-2xl border border-slate-800 bg-slate-900/80 p-6 lg:col-span-1">
-          <div className="flex items-center gap-2 text-lime-400 mb-2">
+        <div className="animate-item rounded-2xl border border-slate-800/80 bg-[#0B1628]/80 p-6 shadow-xl backdrop-blur-xl lg:col-span-1">
+          <div className="flex items-center gap-2 text-lime-400 mb-2 border-b border-slate-800/60 pb-3">
             <Radio size={18} />
-            <h2 className="font-semibold text-white text-lg">Add New Sensor Node</h2>
+            <h2 className="font-bold text-white text-base">Provision New Sensor Node</h2>
           </div>
-          <p className="text-xs text-slate-500 mb-6">
-            Register an edge device (ESP32, STM32, MQTT Broker, or Raspberry Pi)
+          <p className="text-xs text-slate-400 mb-5 leading-relaxed">
+            Register a physical or simulated edge device (ESP32, STM32, MQTT Broker, or Raspberry Pi).
           </p>
 
           <form onSubmit={handleAddSensor} className="space-y-4">
             <div>
-              <label className="mb-1.5 block text-xs font-medium text-slate-300">
-                Sensor ID (Optional)
-              </label>
-              <input
-                type="text"
-                placeholder="e.g. sens-005"
-                value={sensorId}
-                onChange={(e) => setSensorId(e.target.value)}
-                className="w-full rounded-xl border border-slate-800 bg-slate-950/80 px-4 py-2.5 text-sm text-white placeholder-slate-600 outline-none focus:border-lime-400"
-              />
-            </div>
-
-            <div>
-              <label className="mb-1.5 block text-xs font-medium text-slate-300">
-                Sensor Name *
+              <label className="mb-1.5 block text-xs font-semibold text-slate-300">
+                Sensor Node Name *
               </label>
               <input
                 type="text"
                 required
-                placeholder="e.g. Rooftop String B Array"
+                placeholder="e.g. String Inverter Array C"
                 value={sensorName}
                 onChange={(e) => setSensorName(e.target.value)}
-                className="w-full rounded-xl border border-slate-800 bg-slate-950/80 px-4 py-2.5 text-sm text-white placeholder-slate-600 outline-none focus:border-lime-400"
+                className="w-full rounded-xl border border-slate-700 bg-slate-950/70 px-4 py-2.5 text-xs text-slate-100 placeholder:text-slate-500 outline-none transition focus:border-lime-400 focus:ring-1 focus:ring-lime-400/30"
               />
             </div>
 
             <div>
-              <label className="mb-1.5 block text-xs font-medium text-slate-300">
-                Installation Location / Room
+              <label className="mb-1.5 block text-xs font-semibold text-slate-300">
+                Installation Location / Chamber
               </label>
               <input
                 type="text"
-                placeholder="e.g. Room 2 / West Inverter Bay"
+                placeholder="e.g. Inverter Bay #2 / East Roof"
                 value={room}
                 onChange={(e) => setRoom(e.target.value)}
-                className="w-full rounded-xl border border-slate-800 bg-slate-950/80 px-4 py-2.5 text-sm text-white placeholder-slate-600 outline-none focus:border-lime-400"
+                className="w-full rounded-xl border border-slate-700 bg-slate-950/70 px-4 py-2.5 text-xs text-slate-100 placeholder:text-slate-500 outline-none transition focus:border-lime-400 focus:ring-1 focus:ring-lime-400/30"
               />
             </div>
 
             <div>
-              <label className="mb-1.5 block text-xs font-medium text-slate-300">
-                Connection Type
+              <label className="mb-1.5 block text-xs font-semibold text-slate-300">
+                Rated Output Capacity (kW)
+              </label>
+              <input
+                type="number"
+                step="0.1"
+                min="0.5"
+                max="50"
+                required
+                value={ratedPower}
+                onChange={(e) => setRatedPower(e.target.value)}
+                className="w-full rounded-xl border border-slate-700 bg-slate-950/70 px-4 py-2.5 text-xs text-slate-100 placeholder:text-slate-500 outline-none transition focus:border-lime-400 focus:ring-1 focus:ring-lime-400/30 font-mono"
+              />
+              <span className="text-[10px] text-slate-400 mt-1 block">
+                This capacity will dynamically contribute to the total live generation.
+              </span>
+            </div>
+
+            <div>
+              <label className="mb-1.5 block text-xs font-semibold text-slate-300">
+                Connection Protocol
               </label>
               <select
                 value={connectionType}
                 onChange={(e) => setConnectionType(e.target.value as SensorConnectionType)}
-                className="w-full rounded-xl border border-slate-800 bg-slate-950/80 px-4 py-2.5 text-sm text-white outline-none focus:border-lime-400"
+                className="w-full rounded-xl border border-slate-700 bg-slate-950/70 px-4 py-2.5 text-xs text-slate-100 outline-none transition focus:border-lime-400 focus:ring-1 focus:ring-lime-400/30"
               >
-                <option value="ESP32">ESP32</option>
-                <option value="STM32">STM32</option>
-                <option value="Raspberry Pi">Raspberry Pi</option>
-                <option value="MQTT">MQTT Broker</option>
-                <option value="HTTP API">HTTP REST API</option>
-                <option value="Firebase">Firebase SDK Direct</option>
+                <option value="ESP32">ESP32 (Wi-Fi / BLE)</option>
+                <option value="Arduino">Arduino MCU (Serial)</option>
+                <option value="STM32">STM32 (Modbus RTU)</option>
+                <option value="Raspberry Pi">Raspberry Pi (Gateway)</option>
+                <option value="MQTT">MQTT Broker Stream</option>
+                <option value="HTTP API">HTTP REST API Push</option>
+                <option value="Firebase">Firebase RTDB Direct</option>
               </select>
             </div>
 
             <div>
-              <label className="mb-1.5 block text-xs font-medium text-slate-300">
-                Endpoint / IP Address
+              <label className="mb-1.5 block text-xs font-semibold text-slate-300">
+                Target Endpoint / IP Address
               </label>
               <input
                 type="text"
                 placeholder="e.g. 192.168.1.140:8080"
                 value={endpoint}
                 onChange={(e) => setEndpoint(e.target.value)}
-                className="w-full rounded-xl border border-slate-800 bg-slate-950/80 px-4 py-2.5 text-sm text-white placeholder-slate-600 outline-none focus:border-lime-400"
+                className="w-full rounded-xl border border-slate-700 bg-slate-950/70 px-4 py-2.5 text-xs text-slate-100 placeholder:text-slate-500 outline-none transition focus:border-lime-400 focus:ring-1 focus:ring-lime-400/30 font-mono"
               />
             </div>
 
             {statusMsg && (
               <div
-                className={`flex items-center gap-2 rounded-xl p-3 text-xs ${
+                className={`flex items-start gap-2 rounded-xl p-3 text-xs ${
                   statusMsg.type === "success"
-                    ? "border border-lime-400/20 bg-lime-400/10 text-lime-300"
-                    : "border border-red-500/20 bg-red-500/10 text-red-300"
+                    ? "border border-lime-400/30 bg-lime-400/10 text-lime-400"
+                    : "border border-red-500/30 bg-red-500/10 text-red-300"
                 }`}
               >
-                {statusMsg.type === "success" ? <Check size={16} /> : <AlertCircle size={16} />}
+                {statusMsg.type === "success" ? <Check size={15} className="shrink-0 mt-0.5" /> : <AlertCircle size={15} className="shrink-0 mt-0.5" />}
                 <span>{statusMsg.text}</span>
               </div>
             )}
@@ -196,21 +227,25 @@ export default function ConnectSensor() {
             <button
               type="submit"
               disabled={isSubmitting}
-              className="mt-2 flex w-full items-center justify-center gap-2 rounded-xl bg-lime-400 py-3 text-sm font-semibold text-slate-950 transition hover:bg-lime-300 disabled:opacity-50"
+              className="mt-2 flex w-full items-center justify-center gap-2 rounded-xl bg-lime-500 py-3 text-xs font-bold text-slate-950 shadow-md shadow-lime-500/20 transition-all duration-200 hover:bg-lime-400 hover:shadow-lime-400/30 active:scale-[0.98] disabled:opacity-50"
             >
-              <Plus size={16} />
-              {isSubmitting ? "Configuring..." : "Register Sensor"}
+              <Plus size={15} />
+              <span>{isSubmitting ? "Activating Node..." : "Connect & Activate Sensor Node"}</span>
             </button>
           </form>
         </div>
 
         {/* Existing Sensors List */}
         <div className="lg:col-span-2 space-y-4">
-          <div className="flex items-center justify-between">
-            <h2 className="text-lg font-semibold text-white">
-              Configured Sensor Nodes ({sensors.length})
+          <div className="flex items-center justify-between border-b border-slate-800/60 pb-3">
+            <h2 className="text-base sm:text-lg font-bold tracking-tight text-white flex items-center gap-2">
+              <Database size={18} className="text-lime-400" />
+              <span>Provisioned Hardware Nodes ({sensors.length})</span>
             </h2>
-            <span className="text-xs text-slate-500">Live Emulation</span>
+            <span className="text-xs font-mono text-emerald-400 flex items-center gap-1.5">
+              <span className="h-2 w-2 rounded-full bg-emerald-400 animate-pulse" />
+              Live RTDB Stream Active
+            </span>
           </div>
 
           <div className="grid gap-4 sm:grid-cols-2">
@@ -220,19 +255,24 @@ export default function ConnectSensor() {
           </div>
 
           {/* Integration Guide Card */}
-          <div className="mt-8 rounded-2xl border border-slate-800 bg-slate-950/60 p-6">
-            <h3 className="font-semibold text-white text-sm">Edge Hardware Integration Guide</h3>
+          <div className="mt-8 rounded-2xl border border-slate-800/80 bg-[#0B1628]/80 p-6 shadow-xl backdrop-blur-xl">
+            <div className="flex items-center gap-2 text-lime-400 mb-2">
+              <Terminal size={18} />
+              <h3 className="font-bold text-white text-sm">Edge Hardware Firmware Spec</h3>
+            </div>
             <p className="mt-1 text-xs text-slate-400">
-              When ready to deploy physical sensors, configure your ESP32/STM32 firmware to stream JSON payloads:
+              Configure your physical ESP32, STM32, or Raspberry Pi firmware to push JSON payloads to Firebase Realtime Database or local microservice:
             </p>
-            <pre className="mt-3 overflow-x-auto rounded-xl bg-slate-900/90 p-4 text-[11px] text-lime-300 font-mono">
-{`// Example ESP32 / Arduino JSON Payload:
+            <pre className="mt-3 overflow-x-auto rounded-xl border border-slate-800 bg-slate-950/80 p-4 text-[11px] text-lime-300 font-mono">
+{`// Example Arduino / ESP32 JSON Payload:
 {
-  "sensorId": "sens-001",
-  "temperature": 28.6,
-  "humidity": 62.0,
-  "pressure": 1008,
-  "voltage": 230.4,
+  "sensorId": "SP-INV-01",
+  "power": 3.18,
+  "voltage": 230.8,
+  "current": 13.8,
+  "temperature": 34.2,
+  "humidity": 58.0,
+  "pressure": 1012,
   "status": "normal"
 }`}
             </pre>

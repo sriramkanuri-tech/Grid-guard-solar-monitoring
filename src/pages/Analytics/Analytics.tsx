@@ -7,6 +7,7 @@ import { gridDataService } from "../../services/gridDataService";
 import { energyService } from "../../services/energyService";
 import type { GridData } from "../../types/grid";
 import type { TimeFilter } from "../../types/energy";
+import { Sun, Zap, Plug, BatteryCharging } from "lucide-react";
 
 export default function Analytics() {
   const [filter, setFilter] = useState<TimeFilter>("today");
@@ -49,14 +50,14 @@ export default function Analytics() {
       />
 
       {/* Summary KPI Cards */}
-      <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+      <section className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
         <StatCard
           title="Average Solar Power"
           value={avgPower}
           decimals={2}
           unit="kW"
-          change="Average peak daylight hours"
-          icon="☀️"
+          change="Average daylight output"
+          icon={<Sun size={20} />}
         />
 
         <StatCard
@@ -65,7 +66,7 @@ export default function Analytics() {
           decimals={1}
           unit="kWh"
           change={filter === "today" ? "Generated today" : `Total over ${filter}`}
-          icon="⚡"
+          icon={<Zap size={20} />}
         />
 
         <StatCard
@@ -74,16 +75,16 @@ export default function Analytics() {
           decimals={1}
           unit="V"
           change="Standard nominal range 230V"
-          icon="🔌"
+          icon={<Plug size={20} />}
         />
 
         <StatCard
-          title="Average Battery Level"
+          title="Average Battery SoC"
           value={avgBattery}
           decimals={0}
           unit="%"
-          change="Health score 98%"
-          icon="🔋"
+          change="Cell health index 98%"
+          icon={<BatteryCharging size={20} />}
         />
       </section>
 
@@ -91,26 +92,26 @@ export default function Analytics() {
       <section className="mt-8 grid gap-6 lg:grid-cols-2">
         {/* Power & Energy Trend */}
         <ChartCard
-          title="Solar Power Trend"
-          subtitle={`Solar output profile (${filter.toUpperCase()})`}
+          title="Solar Power Profile"
+          subtitle={`Solar generation curve (${filter.toUpperCase()})`}
           activeFilter={filter}
           onFilterChange={(f) => setFilter(f)}
           badge="kW"
         >
-          <div className="flex h-56 items-end gap-3 sm:gap-6 pt-4">
+          <div className="flex h-56 items-end gap-2.5 sm:gap-4 pt-4">
             {trendData.power.map((val, idx) => {
               const maxVal = Math.max(...trendData.power) * 1.15 || 5.5;
               const heightPercent = Math.min(100, Math.max(10, (val / maxVal) * 100));
               return (
                 <div key={idx} className="flex h-full flex-1 flex-col items-center justify-end">
-                  <span className="mb-2 text-[11px] font-medium text-lime-400">
+                  <span className="mb-2 text-[10px] sm:text-[11px] font-mono font-bold text-lime-400">
                     {val}
                   </span>
                   <div
-                    className="w-full rounded-t-lg bg-lime-400/80 transition-all duration-500 hover:bg-lime-400"
+                    className="w-full rounded-t-md bg-gradient-to-t from-lime-500/30 to-lime-400 transition-all duration-500 hover:brightness-125"
                     style={{ height: `${heightPercent}%` }}
                   />
-                  <span className="mt-2 text-[10px] text-slate-500">
+                  <span className="mt-2 text-[10px] font-mono text-slate-500">
                     {trendData.labels[idx]}
                   </span>
                 </div>
@@ -121,24 +122,24 @@ export default function Analytics() {
 
         {/* Energy Generation Cumulative Overview */}
         <ChartCard
-          title="Energy Yield Overview"
-          subtitle={`Cumulative energy generated (${filter.toUpperCase()})`}
+          title="Cumulative Energy Yield"
+          subtitle={`Total electrical output accumulated (${filter.toUpperCase()})`}
           badge="kWh"
         >
-          <div className="flex h-56 items-end gap-3 sm:gap-6 pt-4">
+          <div className="flex h-56 items-end gap-2.5 sm:gap-4 pt-4">
             {trendData.energy.map((val, idx) => {
               const maxVal = Math.max(...trendData.energy) * 1.15 || 50;
               const heightPercent = Math.min(100, Math.max(10, (val / maxVal) * 100));
               return (
                 <div key={idx} className="flex h-full flex-1 flex-col items-center justify-end">
-                  <span className="mb-2 text-[11px] font-medium text-emerald-400">
+                  <span className="mb-2 text-[10px] sm:text-[11px] font-mono font-bold text-emerald-400">
                     {val}
                   </span>
                   <div
-                    className="w-full rounded-t-lg bg-emerald-500/70 transition-all duration-500 hover:bg-emerald-400"
+                    className="w-full rounded-t-md bg-gradient-to-t from-emerald-500/30 to-emerald-400 transition-all duration-500 hover:brightness-125"
                     style={{ height: `${heightPercent}%` }}
                   />
-                  <span className="mt-2 text-[10px] text-slate-500">
+                  <span className="mt-2 text-[10px] font-mono text-slate-500">
                     {trendData.labels[idx]}
                   </span>
                 </div>
@@ -149,24 +150,23 @@ export default function Analytics() {
 
         {/* Grid Voltage Trend */}
         <ChartCard
-          title="Grid Voltage Stability"
+          title="Grid Voltage Stability Range"
           subtitle="Phase A nominal voltage tolerance curve"
-          badge="Safe (220-240V)"
+          badge="220-240V Safe"
         >
-          <div className="flex h-52 items-end gap-3 sm:gap-6 pt-4">
+          <div className="flex h-52 items-end gap-2.5 sm:gap-4 pt-4">
             {trendData.voltage.map((val, idx) => {
-              // Voltage relative to base 225V up to 235V
               const heightPercent = ((val - 225) / 12) * 100;
               return (
                 <div key={idx} className="flex h-full flex-1 flex-col items-center justify-end">
-                  <span className="mb-2 text-[11px] font-medium text-sky-400">
+                  <span className="mb-2 text-[10px] sm:text-[11px] font-mono font-bold text-sky-400">
                     {val}V
                   </span>
                   <div
-                    className="w-full rounded-t-lg bg-sky-500/60 transition-all duration-500 hover:bg-sky-400"
+                    className="w-full rounded-t-md bg-gradient-to-t from-sky-500/30 to-sky-400 transition-all duration-500 hover:brightness-125"
                     style={{ height: `${Math.min(95, Math.max(20, heightPercent))}%` }}
                   />
-                  <span className="mt-2 text-[10px] text-slate-500">
+                  <span className="mt-2 text-[10px] font-mono text-slate-500">
                     {trendData.labels[idx]}
                   </span>
                 </div>
@@ -177,22 +177,22 @@ export default function Analytics() {
 
         {/* Battery State Trend */}
         <ChartCard
-          title="Battery Storage Trend"
-          subtitle="Lithium BESS state of charge (SoC)"
+          title="BESS Storage Charge Curve"
+          subtitle="Lithium battery bank state of charge (SoC)"
           badge="Optimal"
         >
-          <div className="flex h-52 items-end gap-3 sm:gap-6 pt-4">
+          <div className="flex h-52 items-end gap-2.5 sm:gap-4 pt-4">
             {trendData.battery.map((val, idx) => {
               return (
                 <div key={idx} className="flex h-full flex-1 flex-col items-center justify-end">
-                  <span className="mb-2 text-[11px] font-medium text-amber-400">
+                  <span className="mb-2 text-[10px] sm:text-[11px] font-mono font-bold text-amber-400">
                     {val}%
                   </span>
                   <div
-                    className="w-full rounded-t-lg bg-amber-400/70 transition-all duration-500 hover:bg-amber-400"
+                    className="w-full rounded-t-md bg-gradient-to-t from-amber-500/30 to-amber-400 transition-all duration-500 hover:brightness-125"
                     style={{ height: `${val}%` }}
                   />
-                  <span className="mt-2 text-[10px] text-slate-500">
+                  <span className="mt-2 text-[10px] font-mono text-slate-500">
                     {trendData.labels[idx]}
                   </span>
                 </div>

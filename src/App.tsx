@@ -6,10 +6,13 @@ import HomePage from "./pages/HomePage";
 import AboutPage from "./pages/AboutPage";
 import LoginPage from "./pages/LoginPage";
 import RegisterPage from "./pages/RegisterPage";
+import ForgotPasswordPage from "./pages/ForgotPasswordPage";
 
 // Authenticated Layout & Route Protection
 import AppLayout from "./components/AppLayout";
 import ProtectedRoute from "./components/ProtectedRoute";
+import AdminRoute from "./components/AdminRoute";
+import AdminLayout from "./components/AdminLayout";
 
 // Authenticated Pages
 import Dashboard from "./pages/Dashboard/Dashboard";
@@ -22,10 +25,20 @@ import MLDetection from "./pages/MLDetection/MLDetection";
 import Settings from "./pages/Settings/Settings";
 import Profile from "./pages/Profile/Profile";
 
+// Admin Console Pages
+import AdminDashboard from "./pages/Admin/AdminDashboard";
+import AdminMembers from "./pages/Admin/AdminMembers";
+import AdminNodes from "./pages/Admin/AdminNodes";
+import AdminTelemetry from "./pages/Admin/AdminTelemetry";
+import AdminAlerts from "./pages/Admin/AdminAlerts";
+import AdminEmails from "./pages/Admin/AdminEmails";
+import AdminAuditLogs from "./pages/Admin/AdminAuditLogs";
+import AdminSystemHealth from "./pages/Admin/AdminSystemHealth";
+
 const App = () => {
   return (
     <Routes>
-      {/* PUBLIC ROUTES (Outside authenticated AppLayout, no Anime.js) */}
+      {/* PUBLIC ROUTES */}
       <Route
         path="/"
         element={
@@ -66,7 +79,32 @@ const App = () => {
         }
       />
 
-      {/* AUTHENTICATED ROUTES (Protected & using AppLayout with Anime.js) */}
+      <Route
+        path="/forgot-password"
+        element={
+          <>
+            <Navbar />
+            <ForgotPasswordPage />
+          </>
+        }
+      />
+
+      {/* ADMIN CONTROL ROUTES (Restricted to Verified Admins) */}
+      <Route element={<AdminRoute />}>
+        <Route element={<AdminLayout />}>
+          <Route path="/admin" element={<Navigate to="/admin/dashboard" replace />} />
+          <Route path="/admin/dashboard" element={<AdminDashboard />} />
+          <Route path="/admin/members" element={<AdminMembers />} />
+          <Route path="/admin/nodes" element={<AdminNodes />} />
+          <Route path="/admin/telemetry" element={<AdminTelemetry />} />
+          <Route path="/admin/alerts" element={<AdminAlerts />} />
+          <Route path="/admin/emails" element={<AdminEmails />} />
+          <Route path="/admin/audit" element={<AdminAuditLogs />} />
+          <Route path="/admin/system" element={<AdminSystemHealth />} />
+        </Route>
+      </Route>
+
+      {/* AUTHENTICATED MEMBER ROUTES */}
       <Route element={<ProtectedRoute />}>
         <Route element={<AppLayout />}>
           <Route path="/dashboard" element={<Dashboard />} />

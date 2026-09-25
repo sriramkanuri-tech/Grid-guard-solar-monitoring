@@ -6,6 +6,8 @@ export type SensorConnectionType =
   | "Firebase"
   | "ESP32"
   | "STM32"
+  | "Arduino"
+  | "Modbus"
   | "Raspberry Pi";
 
 export interface SensorData {
@@ -15,6 +17,10 @@ export interface SensorData {
   temperature: number; // in °C
   humidity: number; // in %
   pressure: number; // in hPa
+  power?: number; // in kW
+  voltage?: number; // in V
+  current?: number; // in A
+  ratedPower?: number; // in kW
   status: SensorStatus;
   connectionType?: SensorConnectionType;
   endpoint?: string;

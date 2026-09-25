@@ -20,23 +20,27 @@ export const PageHeader: React.FC<PageHeaderProps> = ({
 }) => {
   return (
     <div
-      className={`animate-header animate-item mb-8 flex flex-col sm:flex-row sm:items-center justify-between gap-4 ${className}`}
+      className={`animate-header animate-item mb-8 flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-800/60 pb-6 ${className}`}
     >
       <div>
-        <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">
+        <p className="text-[10px] font-bold uppercase tracking-[0.25em] text-lime-400">
           {category}
         </p>
-        <h1 className="mt-1 text-3xl font-bold tracking-tight text-white sm:text-4xl">
+        <h1 className="mt-1 text-2xl font-extrabold tracking-tight text-white sm:text-3xl lg:text-4xl">
           {title}
         </h1>
-        {subtitle && <p className="mt-2 text-sm text-slate-400">{subtitle}</p>}
+        {subtitle && (
+          <p className="mt-1.5 text-xs sm:text-sm text-slate-400 max-w-3xl leading-relaxed">
+            {subtitle}
+          </p>
+        )}
       </div>
 
       <div className="flex items-center gap-3">
         {isDemo ? (
-          <StatusBadge status="demo" label="Demo Mode Active" pulse />
+          <StatusBadge status="demo" label="Demo Telemetry" pulse />
         ) : (
-          <StatusBadge status="online" label="System Live" pulse />
+          <StatusBadge status="online" label="Hardware Online" pulse />
         )}
         {action}
       </div>

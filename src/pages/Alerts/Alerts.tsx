@@ -5,7 +5,7 @@ import AlertCard from "../../components/AlertCard";
 import StatCard from "../../components/StatCard";
 import { alertService } from "../../services/alertService";
 import type { Alert, AlertSeverity } from "../../types/alert";
-import { Search, Filter, Plus } from "lucide-react";
+import { Search, Filter, Plus, Bell, AlertTriangle, AlertCircle, CheckCircle2 } from "lucide-react";
 
 export default function Alerts() {
   const [alerts, setAlerts] = useState<Alert[]>([]);
@@ -43,7 +43,6 @@ export default function Alerts() {
   };
 
   const filteredAlerts = alerts.filter((alert) => {
-    // Search match
     const query = searchQuery.toLowerCase();
     const matchesSearch =
       alert.message.toLowerCase().includes(query) ||
@@ -53,7 +52,6 @@ export default function Alerts() {
 
     if (!matchesSearch) return false;
 
-    // Filter match
     if (filterSeverity === "all") return true;
     if (filterSeverity === "resolved") return alert.resolved;
     return !alert.resolved && alert.severity === filterSeverity;
@@ -64,36 +62,36 @@ export default function Alerts() {
       <PageHeader
         title="Alerts & Fault Detection"
         subtitle="Automatic threshold breaches, electrical trips, and grid disturbance notifications"
-        category="Alerts"
+        category="Fault Detection"
         action={
           <button
             onClick={handleCreateTestAlert}
-            className="flex items-center gap-2 rounded-xl border border-lime-400/30 bg-lime-400/10 px-3.5 py-1.5 text-xs font-semibold text-lime-400 transition hover:bg-lime-400 hover:text-slate-950"
+            className="flex items-center gap-2 rounded-xl border border-lime-400/30 bg-lime-400/10 px-3.5 py-2 text-xs font-semibold text-lime-400 transition hover:bg-lime-500 hover:text-slate-950 active:scale-95"
           >
             <Plus size={14} />
-            Simulate Threshold Alert
+            <span>Simulate Threshold Alert</span>
           </button>
         }
       />
 
       {/* KPI Cards */}
-      <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+      <section className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
         <StatCard
-          title="Total Alerts"
+          title="Total Incidents"
           value={totalAlerts}
           decimals={0}
-          unit="Records"
+          unit="Events"
           change="Logged across all nodes"
-          icon="🚨"
+          icon={<Bell size={20} />}
         />
 
         <StatCard
-          title="Critical"
+          title="Critical Faults"
           value={criticalCount}
           decimals={0}
           unit="Active"
-          change="Immediate action required"
-          icon="🛑"
+          change="Requires prompt trip action"
+          icon={<AlertCircle size={20} className="text-red-400" />}
         />
 
         <StatCard
@@ -102,7 +100,7 @@ export default function Alerts() {
           decimals={0}
           unit="Active"
           change="Operating above threshold"
-          icon="⚠️"
+          icon={<AlertTriangle size={20} className="text-amber-400" />}
         />
 
         <StatCard
@@ -111,28 +109,28 @@ export default function Alerts() {
           decimals={0}
           unit="Cleared"
           change="Restored to normal limits"
-          icon="✅"
+          icon={<CheckCircle2 size={20} className="text-emerald-400" />}
         />
       </section>
 
       {/* Filter and Search Bar */}
-      <section className="mt-8 flex flex-col sm:flex-row items-center justify-between gap-4 rounded-2xl border border-slate-800 bg-slate-900/80 p-4">
+      <section className="mt-8 flex flex-col sm:flex-row items-center justify-between gap-4 rounded-2xl border border-slate-800/80 bg-[#0B1628]/80 p-4 shadow-xl backdrop-blur-xl">
         {/* Search */}
         <div className="relative w-full sm:w-80">
-          <Search size={18} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-500" />
+          <Search size={16} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-500" />
           <input
             type="text"
-            placeholder="Search by sensor, room, message..."
+            placeholder="Search sensor, room, message..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            className="w-full rounded-xl border border-slate-800 bg-slate-950/80 py-2 pl-10 pr-4 text-xs text-white placeholder-slate-500 outline-none focus:border-lime-400"
+            className="w-full rounded-xl border border-slate-700 bg-slate-950/70 py-2 pl-9 pr-4 text-xs text-slate-100 placeholder:text-slate-500 outline-none transition focus:border-lime-400 focus:ring-1 focus:ring-lime-400/30"
           />
         </div>
 
         {/* Severity Filter Tabs */}
-        <div className="flex flex-wrap items-center gap-1.5">
+        <div className="flex flex-wrap items-center gap-1.5 w-full sm:w-auto">
           <div className="flex items-center gap-1 text-xs text-slate-500 mr-2">
-            <Filter size={14} />
+            <Filter size={13} />
             <span>Filter:</span>
           </div>
 
@@ -140,10 +138,10 @@ export default function Alerts() {
             <button
               key={tab}
               onClick={() => setFilterSeverity(tab)}
-              className={`rounded-xl px-3.5 py-1.5 text-xs font-medium capitalize transition ${
+              className={`rounded-xl px-3.5 py-1.5 text-xs font-semibold capitalize transition-all ${
                 filterSeverity === tab
-                  ? "bg-lime-400 font-semibold text-slate-950"
-                  : "bg-slate-950/60 text-slate-400 hover:text-white hover:bg-slate-800"
+                  ? "bg-lime-500 font-bold text-slate-950 shadow-xs"
+                  : "border border-slate-800 bg-[#07111F]/70 text-slate-400 hover:text-white hover:bg-slate-800"
               }`}
             >
               {tab}
@@ -153,15 +151,15 @@ export default function Alerts() {
       </section>
 
       {/* Alert Cards List */}
-      <section className="mt-6 space-y-3">
+      <section className="mt-6 space-y-3.5">
         {filteredAlerts.length > 0 ? (
           filteredAlerts.map((alert) => (
             <AlertCard key={alert.id} alert={alert} onResolve={handleResolve} />
           ))
         ) : (
-          <div className="rounded-2xl border border-slate-800 bg-slate-900/40 p-12 text-center">
-            <p className="text-slate-400 text-sm">No alerts match your filter criteria.</p>
-            <p className="text-xs text-slate-600 mt-1">All monitored sensors are operating normally.</p>
+          <div className="rounded-2xl border border-slate-800/80 bg-[#0B1628]/40 p-12 text-center">
+            <p className="text-slate-300 font-medium text-sm">No alerts match your filter criteria.</p>
+            <p className="text-xs text-slate-500 mt-1">All monitored sensors are operating within nominal thresholds.</p>
           </div>
         )}
       </section>

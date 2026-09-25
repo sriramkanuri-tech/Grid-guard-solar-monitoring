@@ -1,15 +1,27 @@
 @import "tailwindcss";
 
+@source "../index.html";
+@source "./**/*.{js,ts,jsx,tsx}";
+
+@layer base {
+  :root {
+    --color-primary-bg: #030712;
+    --color-secondary-bg: #07111f;
+    --color-card-bg: #0b1628;
+    --color-card-elevated: #101d32;
+  }
+}
+
 html {
   scroll-behavior: smooth;
+  color-scheme: dark;
 }
 
 body {
   margin: 0;
   min-width: 320px;
-  background: #020617;
-  color: white;
-
+  background-color: #030712;
+  color: #f8fafc;
   font-family:
     Inter,
     ui-sans-serif,
@@ -18,6 +30,9 @@ body {
     BlinkMacSystemFont,
     "Segoe UI",
     sans-serif;
+  overflow-x: hidden;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
 * {
@@ -26,9 +41,28 @@ body {
 
 ::selection {
   background: #a3e635;
-  color: #020617;
+  color: #030712;
 }
 
 a {
   text-decoration: none;
+}
+
+/* Custom Scrollbar for sleek industrial monitoring look */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: #030712;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #1e293b;
+  border-radius: 9999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #334155;
 }
