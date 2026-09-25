@@ -2,6 +2,8 @@ import { useState } from "react";
 import type { FormEvent } from "react";
 import { Link, useNavigate } from "react-router-dom";
 
+import { registerUser } from "../firebase/auth";
+
 export default function RegisterPage() {
   const navigate = useNavigate();
 
@@ -15,8 +17,9 @@ export default function RegisterPage() {
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
 
   const [error, setError] = useState("");
+  const [isLoading, setIsLoading] = useState(false);
 
-  const handleSubmit = (e: FormEvent) => {
+  const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
     setError("");
 
@@ -45,34 +48,16 @@ export default function RegisterPage() {
       return;
     }
 
-    const existingAccount = localStorage.getItem(
-      "gridguard_account"
-    );
-
-    if (existingAccount) {
-      const account = JSON.parse(existingAccount);
-
-      if (account.email.toLowerCase() === email.toLowerCase()) {
-        setError(
-          "An account with this email already exists. Please sign in."
-        );
-        return;
-      }
+    setIsLoading(true);
+    try {
+      await registerUser(email, password, name, phone);
+      navigate("/dashboard");
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "Registration failed. Please try again.";
+      setError(msg);
+    } finally {
+      setIsLoading(false);
     }
-
-    const account = {
-      name: name.trim(),
-      email: email.trim(),
-      phone: phone.trim(),
-      password,
-    };
-
-    localStorage.setItem(
-      "gridguard_account",
-      JSON.stringify(account)
-    );
-
-    navigate("/login");
   };
 
   return (
@@ -458,9 +443,10 @@ export default function RegisterPage() {
                 {/* SUBMIT */}
                 <button
                   type="submit"
-                  className="group flex w-full items-center justify-center gap-3 rounded-xl bg-lime-400 py-4 font-semibold text-slate-950 shadow-lg shadow-lime-400/10 transition duration-300 hover:bg-lime-300 hover:shadow-lime-400/20"
+                  disabled={isLoading}
+                  className="group flex w-full items-center justify-center gap-3 rounded-xl bg-lime-400 py-4 font-semibold text-slate-950 shadow-lg shadow-lime-400/10 transition duration-300 hover:bg-lime-300 hover:shadow-lime-400/20 disabled:opacity-50"
                 >
-                  Create account
+                  {isLoading ? "Creating account..." : "Create account"}
 
                   <svg
                     width="19"

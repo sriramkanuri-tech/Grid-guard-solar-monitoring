@@ -226,9 +226,8 @@ function HealthRow({
       </span>
 
       <span
-        className={`text-sm font-semibold ${
-          good ? "text-lime-400" : "text-white"
-        }`}
+        className={`text-sm font-semibold ${good ? "text-lime-400" : "text-white"
+          }`}
       >
         {value}
       </span>

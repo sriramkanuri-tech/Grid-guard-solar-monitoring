@@ -1,3 +1,5 @@
+import SolarGrid3DBackground from "../components/SolarGrid3DBackground";
+
 export default function HomePage() {
   const isLoggedIn =
     localStorage.getItem("gridguard_user") !== null;
@@ -15,7 +17,9 @@ export default function HomePage() {
   }
 
   return (
-    <div className="min-h-screen bg-slate-950 text-white">
+    <div className="relative min-h-screen bg-slate-950 text-white overflow-x-hidden">
+      {/* 3D BACKGROUND ANIMATION */}
+      <SolarGrid3DBackground className="fixed inset-0 z-0 opacity-80" />
 
       {/* ===================================================== */}
       {/* HERO */}
@@ -23,7 +27,7 @@ export default function HomePage() {
 
       <section
         id="home"
-        className="relative flex min-h-screen items-center overflow-hidden px-6 pt-24"
+        className="relative z-10 flex min-h-screen items-center overflow-hidden px-6 pt-24"
       >
         {/* GRID BACKGROUND */}
         <div
@@ -295,7 +299,7 @@ export default function HomePage() {
 
       <section
         id="about"
-        className="border-t border-white/5 px-6 py-24"
+        className="relative z-10 border-t border-white/5 px-6 py-24"
       >
 
         <div className="mx-auto max-w-7xl">
@@ -375,7 +379,7 @@ export default function HomePage() {
 
       <section
         id="features"
-        className="border-y border-white/5 bg-white/[0.02] px-6 py-24"
+        className="relative z-10 border-y border-white/5 bg-white/[0.02] px-6 py-24"
       >
 
         <div className="mx-auto max-w-7xl">
@@ -445,7 +449,7 @@ export default function HomePage() {
       {/* HOW IT WORKS */}
       {/* ===================================================== */}
 
-      <section className="px-6 py-24">
+      <section className="relative z-10 px-6 py-24">
 
         <div className="mx-auto max-w-7xl">
 
@@ -499,7 +503,7 @@ export default function HomePage() {
 
       <section
         id="contact"
-        className="border-t border-white/5 bg-white/[0.02] px-6 py-24"
+        className="relative z-10 border-t border-white/5 bg-white/[0.02] px-6 py-24"
       >
 
         <div className="mx-auto max-w-5xl">
@@ -563,7 +567,7 @@ export default function HomePage() {
       {/* FOOTER */}
       {/* ===================================================== */}
 
-      <footer className="border-t border-white/10 px-6 py-10">
+      <footer className="relative z-10 border-t border-white/10 px-6 py-10">
 
         <div className="mx-auto flex max-w-7xl flex-col justify-between gap-5 sm:flex-row sm:items-center">
 
