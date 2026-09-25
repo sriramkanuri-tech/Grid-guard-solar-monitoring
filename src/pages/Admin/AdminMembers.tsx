@@ -18,6 +18,7 @@ import {
 import { rtdbService } from "../../firebase/database";
 import { presenceService } from "../../services/presenceService";
 import { apiClient } from "../../services/apiClient";
+import { isConfiguredAdminEmail } from "../../firebase/auth";
 import type { UserProfile, UserRole, UserAccountStatus } from "../../types/user";
 
 export default function AdminMembers() {
@@ -64,15 +65,17 @@ export default function AdminMembers() {
     setAddMsg("");
 
     const cleanEmail = newEmail.trim().toLowerCase();
-    const uid = "usr_" + cleanEmail.replace(/[^a-zA-Z0-9]/g, "_");
+    const isAdmin = isConfiguredAdminEmail(cleanEmail);
+    const assignedRole: UserRole = isAdmin ? "admin" : "member";
+    const uid = isAdmin ? "admin-root-01" : "usr_" + cleanEmail.replace(/[^a-zA-Z0-9]/g, "_");
 
     const newProfile: UserProfile = {
       uid,
       name: newName.trim(),
       email: cleanEmail,
-      role: newRole,
+      role: assignedRole,
       status: newStatus,
-      isAdmin: newRole === "admin",
+      isAdmin,
       mfaEnabled: false,
       createdAt: new Date().toISOString(),
       lastLogin: "Never",
@@ -435,14 +438,15 @@ export default function AdminMembers() {
                   <label className="block text-xs font-semibold text-slate-300 mb-1.5">
                     Assigned Role
                   </label>
-                  <select
-                    value={newRole}
-                    onChange={(e) => setNewRole(e.target.value as UserRole)}
-                    className="w-full rounded-xl border border-slate-700 bg-slate-950/80 px-3 py-2.5 text-xs text-white outline-none focus:border-amber-400 cursor-pointer"
-                  >
-                    <option value="member">Member</option>
-                    <option value="admin">Administrator</option>
-                  </select>
+                  <input
+                    type="text"
+                    readOnly
+                    value="Member (Operator)"
+                    className="w-full rounded-xl border border-slate-700 bg-slate-900/60 px-3 py-2.5 text-xs text-slate-300 outline-none cursor-not-allowed"
+                  />
+                  <p className="mt-1 text-[10px] text-slate-500">
+                    Administrator role is restricted to sriramkanuri4@gmail.com
+                  </p>
                 </div>
 
                 <div>
