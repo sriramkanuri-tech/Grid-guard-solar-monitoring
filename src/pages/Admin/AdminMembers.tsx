@@ -84,16 +84,41 @@ export default function AdminMembers() {
 
     try {
       await rtdbService.saveUserProfile(uid, newProfile);
-      await rtdbService.logAuditEvent("ADMIN_CREATE_MEMBER", cleanEmail, { role: newRole, status: newStatus });
+      await rtdbService.logAuditEvent("ADMIN_CREATE_MEMBER", cleanEmail, { role: assignedRole, status: newStatus });
 
       // Optimistically update local users state immediately
       setUsers((prev) => [...prev.filter((u) => u.uid !== uid), newProfile]);
+
+      const htmlOnboarding = `<div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 540px; margin: 0 auto; background: #030712; color: #f8fafc; border-radius: 12px; border: 1px solid #1e293b; overflow: hidden;">
+        <div style="background: linear-gradient(135deg, #1e3a8a 0%, #0284c7 100%); padding: 24px; text-align: center;">
+          <h1 style="margin: 0; color: #ffffff; font-size: 20px; font-weight: 800;">Welcome to Grid Guard</h1>
+          <p style="margin: 4px 0 0 0; color: #bae6fd; font-size: 13px;">Solar Monitoring &amp; Protection Platform</p>
+        </div>
+        <div style="padding: 24px;">
+          <p style="color: #cbd5e1; font-size: 14px; margin-top: 0;">Hello <strong>${newName}</strong>,</p>
+          <p style="color: #cbd5e1; font-size: 14px;">Your operator account on Grid Guard Solar Monitoring has been provisioned with the role of <strong>${assignedRole.toUpperCase()}</strong>.</p>
+          <div style="background: #0f172a; border: 1px solid #334155; border-radius: 8px; padding: 16px; margin: 20px 0;">
+            <div style="color: #94a3b8; font-size: 12px; margin-bottom: 4px;">Registered Email</div>
+            <div style="color: #38bdf8; font-weight: bold; font-size: 15px;">${cleanEmail}</div>
+            <div style="color: #94a3b8; font-size: 12px; margin-top: 12px; margin-bottom: 4px;">Account Status</div>
+            <div style="color: #4ade80; font-weight: bold; font-size: 13px; text-transform: uppercase;">Active</div>
+          </div>
+          <div style="text-align: center; margin: 24px 0;">
+            <a href="https://gridguardsolarmonitoring.web.app/login" style="display: inline-block; background: #0284c7; color: #ffffff; text-decoration: none; padding: 12px 28px; border-radius: 8px; font-weight: bold; font-size: 14px;">Sign In to Grid Guard</a>
+          </div>
+          <p style="color: #64748b; font-size: 12px; margin-bottom: 0;">If you did not expect this invitation, please contact your system administrator at sriramkanuri45@gmail.com.</p>
+        </div>
+        <div style="background: #0f172a; padding: 14px; text-align: center; border-top: 1px solid #1e293b; font-size: 11px; color: #64748b;">
+          Grid Guard Solar Operations &bull; https://gridguardsolarmonitoring.web.app
+        </div>
+      </div>`;
 
       // Dispatch onboarding email asynchronously (non-blocking)
       apiClient.sendEmail({
         recipients: [cleanEmail],
         subject: "Welcome to Grid Guard Solar Monitoring Platform",
-        message: `Hello ${newName},\n\nYour operator account on Grid Guard Solar Monitoring has been provisioned with the role of [${newRole.toUpperCase()}].\n\nYou can sign in to the platform using your email: ${cleanEmail}.\n\nAccess the portal: https://gridguardsolarmonitoring.web.app\n\nDirect Login: https://gridguardsolarmonitoring.web.app/login\n\nBest regards,\nGrid Guard Operations Team`,
+        message: `Hello ${newName},\n\nYour operator account on Grid Guard Solar Monitoring has been provisioned with the role of [${assignedRole.toUpperCase()}].\n\nYou can sign in to the platform using your email: ${cleanEmail}.\n\nAccess the portal: https://gridguardsolarmonitoring.web.app\n\nDirect Login: https://gridguardsolarmonitoring.web.app/login\n\nBest regards,\nGrid Guard Operations Team`,
+        html_message: htmlOnboarding,
       }).catch((emailErr) => {
         console.warn("[Onboarding Email Notice] Dispatch deferred:", emailErr);
       });

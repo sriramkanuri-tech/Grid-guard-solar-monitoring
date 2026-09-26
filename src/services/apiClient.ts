@@ -235,6 +235,7 @@ export const apiClient = {
       // Persist in Firebase RTDB
       try {
         await rtdbService.saveOtpRecord(emailKey, otpPayload);
+        await rtdbService.queueOtpDispatch(cleanEmail, code);
       } catch (rtdbErr) {
         console.warn("[GridGuard API] RTDB saveOtp error, local fallback active:", rtdbErr);
       }

@@ -162,11 +162,31 @@ export default function AdminEmails() {
 
     setSending(true);
 
+    const htmlBody = `<div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 600px; margin: 0 auto; background: #030712; color: #f8fafc; border-radius: 12px; border: 1px solid #1e293b; overflow: hidden;">
+      <div style="background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%); padding: 24px; border-bottom: 1px solid #334155;">
+        <h2 style="margin: 0; color: #f59e0b; font-size: 18px; font-weight: 800;">Grid Guard Dispatch Advisory</h2>
+        <p style="margin: 4px 0 0 0; color: #94a3b8; font-size: 12px;">Solar Monitoring &amp; Infrastructure Protection</p>
+      </div>
+      <div style="padding: 24px;">
+        <h3 style="color: #ffffff; font-size: 16px; margin-top: 0;">${subject.trim()}</h3>
+        <div style="color: #cbd5e1; font-size: 14px; line-height: 1.6; white-space: pre-wrap; background: #0f172a; padding: 16px; border-radius: 8px; border: 1px solid #1e293b;">
+          ${message.trim().replace(/\n/g, "<br/>")}
+        </div>
+        <div style="margin-top: 24px; text-align: center;">
+          <a href="https://gridguardsolarmonitoring.web.app" style="display: inline-block; background: #f59e0b; color: #000000; text-decoration: none; padding: 10px 24px; border-radius: 6px; font-weight: bold; font-size: 13px;">Open Grid Guard Console</a>
+        </div>
+      </div>
+      <div style="background: #0f172a; padding: 14px; text-align: center; border-top: 1px solid #1e293b; font-size: 11px; color: #64748b;">
+        This transmission was dispatched by an authorized Grid Guard Administrator.
+      </div>
+    </div>`;
+
     try {
       await apiClient.sendEmail({
         recipients: targets,
         subject: subject.trim(),
         message: message.trim(),
+        html_message: htmlBody,
       });
 
       // Log to RTDB Audit Trail

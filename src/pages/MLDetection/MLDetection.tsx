@@ -197,15 +197,47 @@ ISOLATION FOREST INFERENCE:
 RECOMMENDED ACTION:
 1. Inspect inverter DC string fuses and MPPT tracking efficiency.
 2. Check module junction thermal sensors for localized hotspot degradation.
-3. Review live telemetry in the Grid Guard Control Console.
+3. Review live telemetry in the Grid Guard Control Console: https://gridguardsolarmonitoring.web.app
 
 Dispatched automatically by Grid Guard ML Autonomous Engine to: ${targetEmail}`;
+
+    const htmlMessage = `<div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 600px; margin: 0 auto; background: #030712; color: #f8fafc; border-radius: 12px; border: 1px solid #1e293b; overflow: hidden;">
+      <div style="background: linear-gradient(135deg, #dc2626 0%, #991b1b 100%); padding: 24px; text-align: center;">
+        <span style="display:inline-block; font-size: 32px; margin-bottom: 8px;">🚨</span>
+        <h1 style="margin: 0; color: #ffffff; font-size: 20px; font-weight: 800; letter-spacing: 0.5px;">CRITICAL SOLAR ANOMALY DETECTED</h1>
+        <p style="margin: 4px 0 0 0; color: #fecaca; font-size: 13px;">Node GG-NODE-01 &bull; Autonomous Isolation Forest Engine</p>
+      </div>
+      <div style="padding: 24px;">
+        <div style="background: #0f172a; border: 1px solid #334155; border-radius: 8px; padding: 16px; margin-bottom: 20px;">
+          <h3 style="margin: 0 0 12px 0; color: #38bdf8; font-size: 14px; text-transform: uppercase; letter-spacing: 1px;">Telemetry Vector</h3>
+          <table style="width: 100%; border-collapse: collapse; font-size: 13px;">
+            <tr><td style="color: #94a3b8; padding: 4px 0;">DC String Output:</td><td style="color: #f8fafc; font-weight: bold; text-align: right;">${metrics.dc} W</td></tr>
+            <tr><td style="color: #94a3b8; padding: 4px 0;">Inverter AC Generation:</td><td style="color: #f8fafc; font-weight: bold; text-align: right;">${metrics.ac} W</td></tr>
+            <tr><td style="color: #94a3b8; padding: 4px 0;">Efficiency Ratio:</td><td style="color: #f8fafc; font-weight: bold; text-align: right;">${((metrics.ac / (metrics.dc || 1)) * 100).toFixed(1)}%</td></tr>
+            <tr><td style="color: #94a3b8; padding: 4px 0;">Module Temperature:</td><td style="color: #ef4444; font-weight: bold; text-align: right;">${metrics.module} °C</td></tr>
+            <tr><td style="color: #94a3b8; padding: 4px 0;">Ambient Temperature:</td><td style="color: #f8fafc; font-weight: bold; text-align: right;">${metrics.ambient} °C</td></tr>
+            <tr><td style="color: #94a3b8; padding: 4px 0;">Solar Irradiance:</td><td style="color: #f8fafc; font-weight: bold; text-align: right;">${metrics.irradiation} kW/m²</td></tr>
+          </table>
+        </div>
+        <div style="background: rgba(220, 38, 38, 0.1); border: 1px solid rgba(220, 38, 38, 0.3); border-radius: 8px; padding: 16px; margin-bottom: 20px;">
+          <div style="color: #f87171; font-weight: bold; font-size: 14px; margin-bottom: 6px;">Evaluation: ABNORMAL (Score: ${result.anomaly_score.toFixed(5)})</div>
+          <div style="color: #cbd5e1; font-size: 13px;">${result.message}</div>
+        </div>
+        <div style="text-align: center; margin: 24px 0;">
+          <a href="https://gridguardsolarmonitoring.web.app" style="display: inline-block; background: #dc2626; color: #ffffff; text-decoration: none; padding: 12px 28px; border-radius: 8px; font-weight: bold; font-size: 14px;">Open Monitoring Console</a>
+        </div>
+      </div>
+      <div style="background: #0f172a; padding: 16px; text-align: center; border-top: 1px solid #1e293b; font-size: 11px; color: #64748b;">
+        Dispatched automatically to ${targetEmail} &bull; Grid Guard Solar Monitoring
+      </div>
+    </div>`;
 
     try {
       await apiClient.sendEmail({
         recipients: [targetEmail],
         subject,
         message,
+        html_message: htmlMessage,
       });
 
       const timeStr = new Date().toLocaleTimeString();
@@ -224,7 +256,7 @@ Dispatched automatically by Grid Guard ML Autonomous Engine to: ${targetEmail}`;
 
   // Autonomous continuous evaluation loop (runs every 3 seconds on live telemetry)
   useEffect(() => {
-    if (!isAutonomous || serverStatus !== "online") return;
+    if (!isAutonomous) return;
 
     const runAutonomousInference = async () => {
       const numDc = Number(dcPower) || 4820;

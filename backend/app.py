@@ -7,8 +7,21 @@ import secrets
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
+from email.header import Header
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+
+# Ensure UTF-8 output encoding on Windows consoles
+if sys.stdout and hasattr(sys.stdout, "reconfigure"):
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+if sys.stderr and hasattr(sys.stderr, "reconfigure"):
+    try:
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
 
 import joblib  # type: ignore[import-untyped]
 import numpy as np
@@ -148,15 +161,15 @@ def send_smtp_email(to_addrs: List[str], subject: str, text_content: str, html_c
 
     try:
         msg = MIMEMultipart("alternative")
-        msg["Subject"] = subject
-        msg["From"] = smtp_from
+        msg["Subject"] = Header(subject, "utf-8")
+        msg["From"] = Header(smtp_from, "utf-8")
         msg["To"] = ", ".join(to_addrs)
 
-        part1 = MIMEText(text_content, "plain")
+        part1 = MIMEText(text_content, "plain", "utf-8")
         msg.attach(part1)
 
         if html_content:
-            part2 = MIMEText(html_content, "html")
+            part2 = MIMEText(html_content, "html", "utf-8")
             msg.attach(part2)
 
         server = smtplib.SMTP(smtp_host, smtp_port, timeout=15)
@@ -693,6 +706,60 @@ def rtdb_background_worker():
                         "status": "ONLINE",
                     }
                     requests.patch(f"{RTDB_BASE_URL}/nodes/GG-NODE-01.json", json=node_update, timeout=3)
+
+                # Process email_queue from Firebase RTDB (every 2 ticks)
+                if tick_count % 2 == 0:
+                    try:
+                        q_res = requests.get(f"{RTDB_BASE_URL}/email_queue.json", timeout=3)
+                        if q_res.status_code == 200 and q_res.json():
+                            queue_data = q_res.json()
+                            for item_id, item in list(queue_data.items()):
+                                if not item or item.get("status") == "SENT":
+                                    continue
+                                recipients = item.get("recipients", [])
+                                subject = item.get("subject", "Grid Guard Notification")
+                                message = item.get("message", "")
+                                html_msg = item.get("html_message")
+                                if recipients and message:
+                                    safe_subj = str(subject).encode("ascii", errors="replace").decode("ascii")
+                                    print(f"[RTDB Email Worker] Dispatching queued email to {recipients}: {safe_subj}")
+                                    sent = send_smtp_email(recipients, subject, message, html_msg)
+                                    if sent:
+                                        requests.delete(f"{RTDB_BASE_URL}/email_queue/{item_id}.json", timeout=3)
+                                    else:
+                                        requests.patch(f"{RTDB_BASE_URL}/email_queue/{item_id}.json", json={"status": "FAILED_RETRY"}, timeout=3)
+                    except Exception as q_err:
+                        safe_err = str(q_err).encode("ascii", errors="replace").decode("ascii")
+                        print(f"[RTDB Email Worker Error] {safe_err}")
+
+                # Process otp_dispatch_queue from Firebase RTDB (every 2 ticks)
+                if tick_count % 2 == 1:
+                    try:
+                        otp_res = requests.get(f"{RTDB_BASE_URL}/otp_dispatch_queue.json", timeout=3)
+                        if otp_res.status_code == 200 and otp_res.json():
+                            otp_queue = otp_res.json()
+                            for queue_id, otp_item in list(otp_queue.items()):
+                                if not otp_item or otp_item.get("status") == "SENT":
+                                    continue
+                                target_email = otp_item.get("email")
+                                code = otp_item.get("otp")
+                                if target_email and code:
+                                    print(f"[RTDB OTP Worker] Sending queued OTP {code} to {target_email}")
+                                    subj = f"Grid Guard Verification Code: {code}"
+                                    body = f"Hello,\n\nYour 6-digit verification code for Grid Guard Solar Monitoring is: {code}\n\nThis code expires in 5 minutes.\n\nPortal Login: https://gridguardsolarmonitoring.web.app/login\n\nBest regards,\nGrid Guard Security Team"
+                                    html_body = f"""<div style="font-family:sans-serif;max-width:500px;margin:auto;background:#030712;color:#fff;padding:24px;border-radius:12px;border:1px solid #1e293b;">
+                                      <h2 style="color:#a3e635;margin-top:0;">Grid Guard Verification</h2>
+                                      <p style="color:#cbd5e1;">Your 6-digit one-time passcode:</p>
+                                      <div style="background:#0f172a;border:1px solid #334155;border-radius:8px;padding:16px;text-align:center;font-size:28px;font-weight:bold;letter-spacing:6px;color:#f59e0b;font-family:monospace;">
+                                        {code}
+                                      </div>
+                                      <p style="color:#64748b;font-size:12px;margin-top:16px;">Expires in 5 minutes. If you did not request this, please disregard.</p>
+                                    </div>"""
+                                    sent = send_smtp_email([target_email], subj, body, html_body)
+                                    if sent:
+                                        requests.delete(f"{RTDB_BASE_URL}/otp_dispatch_queue/{queue_id}.json", timeout=3)
+                    except Exception as otp_q_err:
+                        print(f"[RTDB OTP Worker Error] {otp_q_err}")
             elif res.status_code in (401, 403):
                 rtdb_sync_state["status"] = "PERMISSION_DENIED"
                 rtdb_sync_state["last_error"] = "Firebase RTDB Rules block unauthenticated read/write. Set { \".read\": true, \".write\": true } in Firebase Console Rules."

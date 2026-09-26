@@ -1068,7 +1068,45 @@ export const rtdbService = {
         status: "PENDING",
       });
     } catch (err) {
-      console.warn("[RTDB] Failed queueing email:", err);
+      console.warn("[RTDB] Failed queueing email via SDK, trying REST:", err);
+      try {
+        await fetch(`${databaseURL}/email_queue.json`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            ...payload,
+            queuedAt: new Date().toISOString(),
+            status: "PENDING",
+          }),
+        });
+      } catch (restErr) {
+        console.warn("[RTDB] REST email queue error:", restErr);
+      }
+    }
+  },
+
+  queueOtpDispatch: async (email: string, otp: string): Promise<void> => {
+    const payload = {
+      email,
+      otp,
+      queuedAt: new Date().toISOString(),
+      status: "PENDING",
+    };
+    try {
+      const queueRef = ref(rtdb, "otp_dispatch_queue");
+      const newRef = push(queueRef);
+      await set(newRef, payload);
+    } catch (err) {
+      console.warn("[RTDB] Failed queueing OTP dispatch via SDK, trying REST:", err);
+      try {
+        await fetch(`${databaseURL}/otp_dispatch_queue.json`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+      } catch (restErr) {
+        console.warn("[RTDB] REST OTP queue error:", restErr);
+      }
     }
   },
 };
