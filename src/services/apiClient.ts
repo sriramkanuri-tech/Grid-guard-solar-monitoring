@@ -246,6 +246,18 @@ export const apiClient = {
       try {
         await rtdbService.saveOtpRecord(emailKey, otpPayload);
         await rtdbService.queueOtpDispatch(cleanEmail, code);
+        // Ensure operator profile exists in RTDB so user receives all alerts
+        const existing = await rtdbService.getUserProfile(`usr_${emailKey}`);
+        if (!existing) {
+          await rtdbService.saveUserProfile(`usr_${emailKey}`, {
+            uid: `usr_${emailKey}`,
+            email: cleanEmail,
+            name: cleanEmail.split("@")[0],
+            role: cleanEmail === "sriramkanuri4@gmail.com" ? "admin" : "member",
+            status: "active",
+            createdAt: new Date().toISOString(),
+          });
+        }
       } catch (rtdbErr) {
         console.warn("[GridGuard API] RTDB saveOtp error, local fallback active:", rtdbErr);
       }
@@ -255,9 +267,7 @@ export const apiClient = {
 
       return {
         success: true,
-        message: `Verification code generated: [${code}] (Valid for 5 minutes). Enter this code to sign in.`,
-        otp: code,
-        isFallback: true,
+        message: `A 6-digit verification code has been dispatched to ${cleanEmail}. Please check your email inbox and enter the code.`,
       };
     }
   },

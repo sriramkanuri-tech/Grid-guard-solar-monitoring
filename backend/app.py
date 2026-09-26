@@ -97,6 +97,10 @@ otp_store: Dict[str, Dict[str, Any]] = {}
 # Telegram debouncing cache: { alert_hash: last_sent_timestamp }
 telegram_cooldown_cache: Dict[str, float] = {}
 
+# 24/7 Autonomous ML Engine state
+latest_telemetry_cache: Dict[str, Any] = {}
+last_24h_email_sent: float = 0.0
+
 # Pydantic Schemas
 class SolarReading(BaseModel):
     DC_POWER: float
@@ -621,6 +625,15 @@ def seed_rtdb_data() -> bool:
                 "mfaEnabled": True,
                 "lastSeen": now_iso,
             },
+            "usr_adityalap007_gmail_com": {
+                "uid": "usr_adityalap007_gmail_com",
+                "email": "adityalap007@gmail.com",
+                "name": "Aditya (Operator)",
+                "role": "member",
+                "isAdmin": False,
+                "status": "active",
+                "lastSeen": now_iso,
+            },
         },
         "system": {
             "state": {
@@ -664,6 +677,9 @@ def rtdb_background_worker():
     energy_acc = 45.2
     time.sleep(2)  # Initial grace delay
 
+    session = requests.Session()
+    session.headers.update({"Connection": "close"})
+
     while True:
         try:
             tick_count += 1
@@ -673,27 +689,52 @@ def rtdb_background_worker():
             energy_acc = round(energy_acc + (power_kw / 3600.0), 3)
             power_factor = 0.985
             current_a = round((power_kw * 1000.0) / (bus_voltage * power_factor), 1)
-            temperature = round(34.0 + math.sin(t * 0.2) * 1.5, 1)
+            base_temp = round(34.0 + math.sin(t * 0.2) * 1.5, 1)
             irradiance = round(max(750, min(1000, 860 + math.sin(t * 0.3) * 30)))
             frequency = round(50.02 + math.sin(t * 1.1) * 0.02, 2)
             now_iso = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+            # Anomaly simulation: periodic generation disparity (cycles 60-68 every 90s)
+            is_anomaly_tick = (tick_count > 15 and (tick_count % 90 >= 60 and tick_count % 90 <= 68))
+            if is_anomaly_tick:
+                dc_power_w = round(5820.0 + math.sin(t) * 150.0, 1)
+                ac_power_w = round(440.0 + math.cos(t) * 40.0, 1)  # 7.5% efficiency -> severe anomaly
+                module_temp = round(88.5 + (secrets.randbelow(20) / 10.0), 1)
+                ambient_temp = 32.0
+                node_status = "CRITICAL"
+                effective_kw = round(ac_power_w / 1000.0, 2)
+                efficiency = 7.6
+            else:
+                dc_power_w = round(power_kw * 1000.0 * 1.15, 1)
+                ac_power_w = round(power_kw * 1000.0, 1)
+                module_temp = round(base_temp + 11.2, 1)
+                ambient_temp = round(base_temp - 5.5, 1)
+                node_status = "ONLINE"
+                effective_kw = power_kw
+                efficiency = 95.2
 
             telemetry_data = {
                 "nodeId": "GG-NODE-01",
                 "timestamp": now_iso,
                 "voltage": bus_voltage,
                 "current": current_a,
-                "power": power_kw,
+                "power": effective_kw,
                 "energy": energy_acc,
-                "temperature": temperature,
+                "temperature": module_temp,
                 "irradiance": irradiance,
-                "efficiency": 95.2,
+                "efficiency": efficiency,
                 "frequency": frequency,
                 "powerFactor": power_factor,
-                "status": "ONLINE",
+                "status": node_status,
+                "dc_power": dc_power_w,
+                "ac_power": ac_power_w,
+                "ambient_temperature": ambient_temp,
+                "module_temperature": module_temp,
             }
 
-            res = requests.put(
+            latest_telemetry_cache.update(telemetry_data)
+
+            res = session.put(
                 f"{RTDB_BASE_URL}/telemetry/GG-NODE-01.json",
                 json=telemetry_data,
                 timeout=4,
@@ -712,12 +753,13 @@ def rtdb_background_worker():
                     node_update = {
                         "voltage": bus_voltage,
                         "current": current_a,
-                        "power": power_kw,
+                        "power": effective_kw,
                         "energy": energy_acc,
-                        "temperature": temperature,
+                        "temperature": module_temp,
+                        "status": node_status,
                         "lastSeen": now_iso,
                     }
-                    requests.patch(f"{RTDB_BASE_URL}/nodes/GG-NODE-01.json", json=node_update, timeout=3)
+                    session.patch(f"{RTDB_BASE_URL}/nodes/GG-NODE-01.json", json=node_update, timeout=3)
 
             elif res.status_code in (401, 403):
                 rtdb_sync_state["status"] = "PERMISSION_DENIED"
@@ -731,6 +773,240 @@ def rtdb_background_worker():
             rtdb_sync_state["status"] = "NETWORK_ERROR"
 
         time.sleep(1.0)
+
+
+def autonomous_ml_evaluator_24h():
+    """
+    Dedicated 24/7 autonomous background evaluator.
+    Continuously executes Isolation Forest inference on solar inverter telemetry.
+    When generation disparity is flagged (-1):
+    1. Persists anomaly in RTDB /anomalies
+    2. Raises critical alert in RTDB /alerts
+    3. Flags node status as CRITICAL
+    4. Gathers all registered operator emails (e.g. adityalap007@gmail.com, sriramkanuri4@gmail.com)
+    5. Dispatches diagnostic HTML advisory email via SMTP
+    """
+    global last_24h_email_sent
+    session = requests.Session()
+    session.headers.update({"Connection": "close"})
+    print("[24/7 ML Engine] Dedicated 24/7 Autonomous Isolation Forest evaluator running.", flush=True)
+
+    time.sleep(5)  # Initial grace delay
+
+    while True:
+        try:
+            if model is None or not features:
+                time.sleep(4)
+                continue
+
+            tel = latest_telemetry_cache.copy()
+            if not tel:
+                time.sleep(2)
+                continue
+
+            dc_power = float(tel.get("dc_power", 0))
+            ac_power = float(tel.get("ac_power", 0))
+            amb_temp = float(tel.get("ambient_temperature", 28.0))
+            mod_temp = float(tel.get("module_temperature", 34.0))
+            irradiance = float(tel.get("irradiance", 850.0))
+            irrad_kw = max(0.01, irradiance / 1000.0)
+
+            now_struct = time.localtime()
+            hour = float(now_struct.tm_hour + now_struct.tm_min / 60.0)
+
+            df = pd.DataFrame([{
+                "DC_POWER": dc_power,
+                "AC_POWER": ac_power,
+                "AMBIENT_TEMPERATURE": amb_temp,
+                "MODULE_TEMPERATURE": mod_temp,
+                "IRRADIATION": irrad_kw,
+            }])
+
+            df["HOUR_SIN"] = np.sin(2 * np.pi * hour / 24)
+            df["HOUR_COS"] = np.cos(2 * np.pi * hour / 24)
+            df["AC_DC_RATIO"] = (ac_power / dc_power) if dc_power > 1 else 0
+            df["POWER_PER_IRRADIANCE"] = (ac_power / irrad_kw) if irrad_kw > 0.05 else 0
+            df = df.replace([np.inf, -np.inf], np.nan).fillna(0)
+
+            pred = int(model.predict(df[features])[0])
+            score = float(model.decision_function(df[features])[0])
+            is_anomaly = (pred == -1 or score < 0)
+
+            now_iso = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+            inf_id = f"inf_24h_{int(time.time() * 1000)}"
+
+            # Save inference record to RTDB /ml_history
+            inf_record = {
+                "id": inf_id,
+                "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+                "inputs": {
+                    "dc": round(dc_power, 1),
+                    "ac": round(ac_power, 1),
+                    "ambientTemp": round(amb_temp, 1),
+                    "moduleTemp": round(mod_temp, 1),
+                    "irradiation": round(irrad_kw, 2),
+                    "hour": round(hour, 2),
+                },
+                "prediction": pred,
+                "status": "ABNORMAL" if is_anomaly else "NORMAL",
+                "anomalyScore": round(score, 5),
+                "message": "Isolation Forest flagged abnormal generation disparity" if is_anomaly else "Solar inverter operating within nominal distribution",
+            }
+
+            # Persist record on anomaly or every ~9 seconds for smooth charts
+            if is_anomaly or int(time.time()) % 9 == 0:
+                try:
+                    session.put(f"{RTDB_BASE_URL}/ml_history/{inf_id}.json", json=inf_record, timeout=5)
+                except Exception:
+                    pass
+
+            if is_anomaly:
+                now_epoch = time.time()
+                # 60s cooldown for email broadcast
+                if now_epoch - last_24h_email_sent >= 60.0:
+                    last_24h_email_sent = now_epoch
+                    anom_id = f"anom_24h_{int(now_epoch * 1000)}"
+
+                    # 1. Harvest ALL registered & active operator emails
+                    recipients = [os.getenv("ADMIN_EMAIL", "sriramkanuri4@gmail.com")]
+                    try:
+                        u_res = session.get(f"{RTDB_BASE_URL}/users.json", timeout=6)
+                        if u_res.status_code == 200 and u_res.json():
+                            u_data = u_res.json()
+                            if isinstance(u_data, dict):
+                                for u in u_data.values():
+                                    if isinstance(u, dict) and u.get("email"):
+                                        recipients.append(u.get("email"))
+                    except Exception as u_err:
+                        print(f"[24/7 ML] Error reading users: {u_err}")
+
+                    try:
+                        otp_res = session.get(f"{RTDB_BASE_URL}/auth_otps.json", timeout=6)
+                        if otp_res.status_code == 200 and otp_res.json():
+                            otp_data = otp_res.json()
+                            if isinstance(otp_data, dict):
+                                for o in otp_data.values():
+                                    if isinstance(o, dict) and o.get("email"):
+                                        recipients.append(o.get("email"))
+                    except Exception:
+                        pass
+
+                    recipients = list(dict.fromkeys([
+                        str(r).strip().lower() for r in recipients if r and "@" in str(r)
+                    ]))
+
+                    print(f"[24/7 ML Engine] ABNORMAL condition flagged (Score: {score:.5f}). Notifying operators: {recipients}", flush=True)
+
+                    # 2. Persist Anomaly in RTDB
+                    anom_payload = {
+                        "id": anom_id,
+                        "nodeId": "GG-NODE-01",
+                        "timestamp": now_iso,
+                        "status": "ABNORMAL",
+                        "prediction": -1,
+                        "anomalyScore": round(score, 5),
+                        "message": "24/7 ML Isolation Forest flagged abnormal generation disparity",
+                        "inputs": inf_record["inputs"],
+                        "metrics": {
+                            "acDcRatio": round((ac_power / dc_power), 3) if dc_power > 0 else 0,
+                            "tempDisparity": round(mod_temp - amb_temp, 1),
+                        },
+                        "emailAlertSent": True,
+                        "alertRecipient": ", ".join(recipients),
+                        "resolved": False,
+                        "createdAt": now_iso,
+                    }
+                    try:
+                        session.put(f"{RTDB_BASE_URL}/anomalies/{anom_id}.json", json=anom_payload, timeout=6)
+                        session.patch(f"{RTDB_BASE_URL}/nodes/GG-NODE-01.json", json={"status": "CRITICAL"}, timeout=5)
+                    except Exception as anom_err:
+                        print(f"[24/7 ML] Error writing anomaly to RTDB: {anom_err}")
+
+                    # 3. Create Critical Alert in RTDB
+                    alert_id = f"alert_24h_{int(now_epoch * 1000)}"
+                    alert_payload = {
+                        "id": alert_id,
+                        "nodeId": "GG-NODE-01",
+                        "type": "ANOMALY_DETECTION",
+                        "severity": "CRITICAL",
+                        "message": f"ML 24/7 Isolation Forest Alert: Abnormal generation disparity (Score: {score:.4f})",
+                        "value": round(score, 4),
+                        "threshold": 0.0,
+                        "resolved": False,
+                        "status": "OPEN",
+                        "acknowledged": False,
+                        "timestamp": now_iso,
+                    }
+                    try:
+                        session.put(f"{RTDB_BASE_URL}/alerts/{alert_id}.json", json=alert_payload, timeout=6)
+                    except Exception:
+                        pass
+
+                    # 4. Dispatch Email to all respected users
+                    subject = "🚨 CRITICAL ALERT: Solar Anomaly Detected on Node GG-NODE-01"
+                    plain_msg = f"""GRID GUARD 24/7 AUTONOMOUS ISOLATION FOREST ADVISORY
+==================================================
+Anomaly Alert: Abnormal Generation Disparity Detected
+Monitoring Node: GG-NODE-01
+Timestamp: {time.strftime('%Y-%m-%d %H:%M:%S UTC', time.gmtime())}
+
+TELEMETRY VECTOR:
+• DC String Output: {dc_power:.1f} W
+• Inverter AC Generation: {ac_power:.1f} W
+• Inverter Efficiency Ratio: {((ac_power / (dc_power or 1)) * 100):.1f}%
+• Module Temperature: {mod_temp:.1f} °C
+• Ambient Temperature: {amb_temp:.1f} °C
+• Solar Irradiance: {irradiance:.0f} W/m²
+
+ISOLATION FOREST INFERENCE:
+• Status: ABNORMAL (Prediction Vector: -1)
+• Outlier Score: {score:.5f}
+• Diagnosis: Isolation Forest flagged abnormal generation disparity
+
+RECOMMENDED ACTION:
+1. Inspect inverter DC string fuses and MPPT tracking efficiency.
+2. Check module junction thermal sensors for localized hotspot degradation.
+3. Review live telemetry in the Grid Guard Control Console: https://gridguardsolarmonitoring.web.app
+
+Dispatched automatically by Grid Guard 24/7 ML Autonomous Engine to: {', '.join(recipients)}"""
+
+                    html_msg = f"""<div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 600px; margin: 0 auto; background: #030712; color: #f8fafc; border-radius: 12px; border: 1px solid #1e293b; overflow: hidden;">
+  <div style="background: linear-gradient(135deg, #dc2626 0%, #991b1b 100%); padding: 24px; text-align: center;">
+    <span style="display:inline-block; font-size: 32px; margin-bottom: 8px;">🚨</span>
+    <h1 style="margin: 0; color: #ffffff; font-size: 20px; font-weight: 800; letter-spacing: 0.5px;">CRITICAL SOLAR ANOMALY DETECTED</h1>
+    <p style="margin: 4px 0 0 0; color: #fecaca; font-size: 13px;">Node GG-NODE-01 &bull; 24/7 Autonomous Isolation Forest Engine</p>
+  </div>
+  <div style="padding: 24px;">
+    <div style="background: #0f172a; border: 1px solid #334155; border-radius: 8px; padding: 16px; margin-bottom: 20px;">
+      <h3 style="margin: 0 0 12px 0; color: #38bdf8; font-size: 14px; text-transform: uppercase; letter-spacing: 1px;">Telemetry Vector</h3>
+      <table style="width: 100%; border-collapse: collapse; font-size: 13px;">
+        <tr><td style="color: #94a3b8; padding: 4px 0;">DC String Output:</td><td style="color: #f8fafc; font-weight: bold; text-align: right;">{dc_power:.1f} W</td></tr>
+        <tr><td style="color: #94a3b8; padding: 4px 0;">Inverter AC Generation:</td><td style="color: #f8fafc; font-weight: bold; text-align: right;">{ac_power:.1f} W</td></tr>
+        <tr><td style="color: #94a3b8; padding: 4px 0;">Efficiency Ratio:</td><td style="color: #f8fafc; font-weight: bold; text-align: right;">{((ac_power / (dc_power or 1)) * 100):.1f}%</td></tr>
+        <tr><td style="color: #94a3b8; padding: 4px 0;">Module Temperature:</td><td style="color: #ef4444; font-weight: bold; text-align: right;">{mod_temp:.1f} °C</td></tr>
+        <tr><td style="color: #94a3b8; padding: 4px 0;">Ambient Temperature:</td><td style="color: #f8fafc; font-weight: bold; text-align: right;">{amb_temp:.1f} °C</td></tr>
+        <tr><td style="color: #94a3b8; padding: 4px 0;">Solar Irradiance:</td><td style="color: #f8fafc; font-weight: bold; text-align: right;">{irradiance:.0f} W/m²</td></tr>
+      </table>
+    </div>
+    <div style="background: rgba(220, 38, 38, 0.1); border: 1px solid rgba(220, 38, 38, 0.3); border-radius: 8px; padding: 16px; margin-bottom: 20px;">
+      <div style="color: #f87171; font-weight: bold; font-size: 14px; margin-bottom: 6px;">Evaluation: ABNORMAL (Score: {score:.5f})</div>
+      <div style="color: #cbd5e1; font-size: 13px;">Isolation Forest flagged abnormal generation disparity</div>
+    </div>
+    <div style="text-align: center; margin: 24px 0;">
+      <a href="https://gridguardsolarmonitoring.web.app" style="display: inline-block; background: #dc2626; color: #ffffff; text-decoration: none; padding: 12px 28px; border-radius: 8px; font-weight: bold; font-size: 14px;">Open Monitoring Console</a>
+    </div>
+  </div>
+  <div style="background: #0f172a; padding: 16px; text-align: center; border-top: 1px solid #1e293b; font-size: 11px; color: #64748b;">
+    Stored in Firebase RTDB &bull; Dispatched to {', '.join(recipients)} &bull; Grid Guard Solar Monitoring
+  </div>
+</div>"""
+
+                    send_smtp_email(recipients, subject, plain_msg, html_msg)
+
+        except Exception as e:
+            print(f"[24/7 ML Loop Error]: {e}", flush=True)
+
+        time.sleep(3.0)
 
 
 def rtdb_queue_dispatcher():
@@ -840,6 +1116,7 @@ def rtdb_queue_dispatcher():
 # Start daemon background threads
 threading.Thread(target=rtdb_background_worker, daemon=True, name="rtdb_telemetry_streamer").start()
 threading.Thread(target=rtdb_queue_dispatcher, daemon=True, name="rtdb_queue_dispatcher").start()
+threading.Thread(target=autonomous_ml_evaluator_24h, daemon=True, name="autonomous_ml_evaluator_24h").start()
 
 
 @app.get("/api/rtdb/status")

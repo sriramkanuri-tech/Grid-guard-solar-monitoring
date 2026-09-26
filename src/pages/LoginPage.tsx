@@ -127,9 +127,8 @@ export default function LoginPage() {
 
     setIsSendingResetOtp(true);
     try {
-      const res = await apiClient.sendOtp(clean);
-      const otpParam = (res as any).otp ? `&otp=${encodeURIComponent((res as any).otp)}` : "";
-      navigate(`/forgot-password?email=${encodeURIComponent(clean)}&sent=1${otpParam}`);
+      await apiClient.sendOtp(clean);
+      navigate(`/forgot-password?email=${encodeURIComponent(clean)}&sent=1`);
     } catch {
       navigate(`/forgot-password?email=${encodeURIComponent(clean)}`);
     } finally {
@@ -153,10 +152,8 @@ export default function LoginPage() {
       const res = await apiClient.sendOtp(targetEmail);
       setOtpSent(true);
       setOtpCooldown(300); // 5 min countdown
-      if ((res as any).otp) {
-        setOtpCode((res as any).otp);
-      }
-      setSuccessMsg(res.message || `A 6-digit verification code was dispatched to ${targetEmail}`);
+      setOtpCode(""); // Must remain empty: user must fetch OTP from their email inbox
+      setSuccessMsg(res.message || `A 6-digit verification code was dispatched to ${targetEmail}. Please check your inbox.`);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : "Unable to connect to Grid Guard server. Please try again.";
       setError(msg);

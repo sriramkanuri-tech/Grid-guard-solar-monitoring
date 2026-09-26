@@ -199,7 +199,12 @@ class MLAutonomousService {
   ) {
     const user = getStoredUser();
     const adminEmail = "sriramkanuri4@gmail.com";
-    const rawEmails = [adminEmail, user?.email];
+    let allRegisteredEmails: string[] = [];
+    try {
+      allRegisteredEmails = await rtdbService.getAllUserEmails();
+    } catch {}
+
+    const rawEmails = [adminEmail, user?.email, ...allRegisteredEmails];
     const recipients = Array.from(
       new Set(
         rawEmails

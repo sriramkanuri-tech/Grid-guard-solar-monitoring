@@ -423,6 +423,18 @@ export const rtdbService = {
       }
     } catch {}
 
+    // Include operators who registered or requested OTP
+    try {
+      const otps = await rtdbFetch<Record<string, { email?: string }>>("auth_otps");
+      if (otps && typeof otps === "object") {
+        Object.values(otps).forEach((item) => {
+          if (item && item.email && typeof item.email === "string" && item.email.includes("@")) {
+            emails.add(item.email.trim().toLowerCase());
+          }
+        });
+      }
+    } catch {}
+
     try {
       const cached = localStorage.getItem(CACHE_USERS_KEY);
       if (cached) {
