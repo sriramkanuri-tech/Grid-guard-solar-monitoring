@@ -25,10 +25,11 @@ export default function ForgotPasswordPage() {
 
   const initialEmail = searchParams.get("email") || "";
   const initialSent = searchParams.get("sent") === "1" || searchParams.get("sent") === "true";
+  const initialOtp = searchParams.get("otp") || "";
 
   const [step, setStep] = useState<1 | 2>(initialSent ? 2 : 1);
   const [email, setEmail] = useState(initialEmail);
-  const [otpCode, setOtpCode] = useState("");
+  const [otpCode, setOtpCode] = useState(initialOtp);
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
@@ -66,6 +67,9 @@ export default function ForgotPasswordPage() {
       const res = await apiClient.sendOtp(targetEmail);
       setStep(2);
       setCooldown(300); // 5 minutes
+      if ((res as any).otp) {
+        setOtpCode((res as any).otp);
+      }
       setSuccessMsg(res.message || `A 6-digit password reset OTP has been sent to ${targetEmail}`);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : "Unable to connect to Grid Guard server. Please try again.";

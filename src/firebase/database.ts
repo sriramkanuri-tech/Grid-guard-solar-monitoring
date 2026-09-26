@@ -1004,4 +1004,71 @@ export const rtdbService = {
       console.warn("[RTDB] Failed deleting sensor:", err);
     }
   },
+
+  saveOtpRecord: async (emailKey: string, payload: any): Promise<void> => {
+    try {
+      const otpRef = ref(rtdb, `auth_otps/${emailKey}`);
+      await set(otpRef, payload);
+    } catch (err) {
+      console.warn("[RTDB] Failed saving OTP via SDK, trying REST:", err);
+      try {
+        await fetch(`${databaseURL}/auth_otps/${emailKey}.json`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+      } catch (restErr) {
+        console.warn("[RTDB] REST OTP save error:", restErr);
+      }
+    }
+  },
+
+  getOtpRecord: async (emailKey: string): Promise<any | null> => {
+    try {
+      const otpRef = ref(rtdb, `auth_otps/${emailKey}`);
+      const snap = await get(otpRef);
+      if (snap.exists()) {
+        return snap.val();
+      }
+    } catch (err) {
+      console.warn("[RTDB] Failed getting OTP via SDK, trying REST:", err);
+    }
+
+    try {
+      const res = await fetch(`${databaseURL}/auth_otps/${emailKey}.json`);
+      if (res.ok) {
+        return await res.json();
+      }
+    } catch {
+      // ignore
+    }
+    return null;
+  },
+
+  removeOtpRecord: async (emailKey: string): Promise<void> => {
+    try {
+      const otpRef = ref(rtdb, `auth_otps/${emailKey}`);
+      await remove(otpRef);
+    } catch {
+      try {
+        await fetch(`${databaseURL}/auth_otps/${emailKey}.json`, { method: "DELETE" });
+      } catch {
+        // ignore
+      }
+    }
+  },
+
+  queueEmailBroadcast: async (payload: any): Promise<void> => {
+    try {
+      const queueRef = ref(rtdb, "email_queue");
+      const newRef = push(queueRef);
+      await set(newRef, {
+        ...payload,
+        queuedAt: new Date().toISOString(),
+        status: "PENDING",
+      });
+    } catch (err) {
+      console.warn("[RTDB] Failed queueing email:", err);
+    }
+  },
 };

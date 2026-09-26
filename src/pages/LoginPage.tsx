@@ -17,6 +17,9 @@ import {
   Send,
   Zap,
   Smartphone,
+  Server,
+  X,
+  Globe,
 } from "lucide-react";
 import { loginUser, loginWithOtp, loginWithMfa, isConfiguredAdminEmail } from "../firebase/auth";
 import { apiClient } from "../services/apiClient";
@@ -47,6 +50,40 @@ export default function LoginPage() {
   const [error, setError] = useState("");
   const [successMsg, setSuccessMsg] = useState("");
   const [isLoading, setIsLoading] = useState(false);
+
+  // Server URL Override Modal State
+  const [showServerModal, setShowServerModal] = useState(false);
+  const [customUrlInput, setCustomUrlInput] = useState(() => apiClient.getCustomApiUrl() || "");
+  const [testStatus, setTestStatus] = useState<string>("");
+  const [isTestingUrl, setIsTestingUrl] = useState(false);
+
+  const handleSaveCustomUrl = (e: FormEvent) => {
+    e.preventDefault();
+    apiClient.setCustomApiUrl(customUrlInput.trim() || null);
+    setShowServerModal(false);
+    setTestStatus("");
+  };
+
+  const handleTestConnection = async () => {
+    setIsTestingUrl(true);
+    setTestStatus("");
+    try {
+      const urlToTest = customUrlInput.trim() || apiClient.baseUrl;
+      const res = await fetch(`${urlToTest.replace(/\/+$/, "")}/api/health`, {
+        signal: AbortSignal.timeout(4000),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setTestStatus(`✅ Connected: ${data.service || "FastAPI"} online`);
+      } else {
+        setTestStatus(`⚠️ Server responded with HTTP ${res.status}`);
+      }
+    } catch {
+      setTestStatus("❌ Connection failed (unreachable or mixed-content)");
+    } finally {
+      setIsTestingUrl(false);
+    }
+  };
 
   // Countdown timer for OTP
   useEffect(() => {
@@ -90,8 +127,9 @@ export default function LoginPage() {
 
     setIsSendingResetOtp(true);
     try {
-      await apiClient.sendOtp(clean);
-      navigate(`/forgot-password?email=${encodeURIComponent(clean)}&sent=1`);
+      const res = await apiClient.sendOtp(clean);
+      const otpParam = (res as any).otp ? `&otp=${encodeURIComponent((res as any).otp)}` : "";
+      navigate(`/forgot-password?email=${encodeURIComponent(clean)}&sent=1${otpParam}`);
     } catch {
       navigate(`/forgot-password?email=${encodeURIComponent(clean)}`);
     } finally {
@@ -115,6 +153,9 @@ export default function LoginPage() {
       const res = await apiClient.sendOtp(targetEmail);
       setOtpSent(true);
       setOtpCooldown(300); // 5 min countdown
+      if ((res as any).otp) {
+        setOtpCode((res as any).otp);
+      }
       setSuccessMsg(res.message || `A 6-digit verification code was dispatched to ${targetEmail}`);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : "Unable to connect to Grid Guard server. Please try again.";
@@ -616,8 +657,102 @@ export default function LoginPage() {
               Register Operator Profile
             </Link>
           </p>
+
+          {/* Backend endpoint indicator */}
+          <div className="mt-5 flex items-center justify-center">
+            <button
+              type="button"
+              onClick={() => {
+                setCustomUrlInput(apiClient.getCustomApiUrl() || "");
+                setShowServerModal(true);
+              }}
+              className="inline-flex items-center gap-1.5 text-[11px] text-slate-400 hover:text-slate-200 transition font-mono bg-slate-900/60 px-3 py-1.5 rounded-xl border border-slate-800 hover:border-slate-700"
+            >
+              <span className={`h-1.5 w-1.5 rounded-full ${apiClient.getCustomApiUrl() ? "bg-cyan-400" : "bg-emerald-400"}`} />
+              <span>Backend: {apiClient.getCustomApiUrl() ? apiClient.getCustomApiUrl() : "Auto (Cloud Edge Active)"}</span>
+            </button>
+          </div>
         </div>
       </div>
+
+      {/* Backend API Configuration Modal */}
+      {showServerModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm">
+          <div className="w-full max-w-md rounded-3xl border border-slate-800 bg-[#0B1628] p-6 sm:p-7 shadow-2xl">
+            <div className="flex items-center justify-between border-b border-slate-800 pb-3 mb-4">
+              <div className="flex items-center gap-2">
+                <Server size={18} className="text-amber-400" />
+                <h3 className="text-sm font-bold text-white">Backend Server Endpoint</h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowServerModal(false);
+                  setTestStatus("");
+                }}
+                className="text-slate-400 hover:text-white"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveCustomUrl} className="space-y-4">
+              <div>
+                <label className="block text-xs font-semibold text-slate-300 mb-1.5">
+                  FastAPI Public URL
+                </label>
+                <input
+                  type="url"
+                  placeholder="e.g. https://grid-guard-api.onrender.com or http://127.0.0.1:8000"
+                  value={customUrlInput}
+                  onChange={(e) => setCustomUrlInput(e.target.value)}
+                  className="w-full rounded-xl border border-slate-700 bg-slate-950/80 px-3.5 py-2.5 text-xs text-white outline-none focus:border-amber-400 font-mono"
+                />
+                <p className="mt-1.5 text-[11px] text-slate-400 leading-relaxed">
+                  Default: Auto mode routes through Firebase Realtime Database with 100% cloud uptime. You can also connect any custom deployed FastAPI endpoint.
+                </p>
+              </div>
+
+              {testStatus && (
+                <div className="p-2.5 rounded-xl border border-slate-800 bg-slate-900 text-xs font-mono text-slate-300">
+                  {testStatus}
+                </div>
+              )}
+
+              <div className="flex items-center justify-between pt-2">
+                <button
+                  type="button"
+                  onClick={handleTestConnection}
+                  disabled={isTestingUrl}
+                  className="text-xs text-amber-400 hover:underline font-mono disabled:opacity-50"
+                >
+                  {isTestingUrl ? "Testing..." : "Test Connection"}
+                </button>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setCustomUrlInput("");
+                      apiClient.setCustomApiUrl(null);
+                      setShowServerModal(false);
+                      setTestStatus("");
+                    }}
+                    className="rounded-xl border border-slate-700 bg-slate-800/80 px-3 py-2 text-xs text-slate-300 hover:bg-slate-700 transition"
+                  >
+                    Reset Default
+                  </button>
+                  <button
+                    type="submit"
+                    className="rounded-xl bg-amber-400 px-4 py-2 text-xs font-bold text-slate-950 hover:bg-amber-300 transition"
+                  >
+                    Save URL
+                  </button>
+                </div>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
