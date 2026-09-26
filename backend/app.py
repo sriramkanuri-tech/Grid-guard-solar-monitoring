@@ -703,7 +703,6 @@ def rtdb_background_worker():
                         "energy": energy_acc,
                         "temperature": temperature,
                         "lastSeen": now_iso,
-                        "status": "ONLINE",
                     }
                     requests.patch(f"{RTDB_BASE_URL}/nodes/GG-NODE-01.json", json=node_update, timeout=3)
 

@@ -1,4 +1,6 @@
+import { useEffect } from "react";
 import { Routes, Route, Navigate } from "react-router-dom";
+import { mlAutonomousService } from "./services/mlAutonomousService";
 
 // Public Components & Pages
 import Navbar from "./components/Navbar";
@@ -36,6 +38,11 @@ import AdminAuditLogs from "./pages/Admin/AdminAuditLogs";
 import AdminSystemHealth from "./pages/Admin/AdminSystemHealth";
 
 const App = () => {
+  useEffect(() => {
+    // Automatically runs autonomous ML monitoring as soon as user opens the website
+    mlAutonomousService.start();
+  }, []);
+
   return (
     <Routes>
       {/* PUBLIC ROUTES */}

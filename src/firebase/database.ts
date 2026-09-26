@@ -13,6 +13,7 @@ import type { UserProfile } from "../types/user";
 import type { GridData } from "../types/grid";
 import type { Alert } from "../types/alert";
 import type { SensorData } from "../types/sensor";
+import type { AnomalyRecord, InferenceHistoryItem } from "../types/ml";
 
 export interface RealtimeTelemetry {
   nodeId: string;
@@ -76,6 +77,73 @@ const CACHE_NODES_KEY = "gridguard_cache_nodes";
 const CACHE_ALERTS_KEY = "gridguard_cache_alerts";
 const CACHE_LOGS_KEY = "gridguard_cache_audit";
 const CACHE_NOTIFS_KEY = "gridguard_cache_notifs";
+const CACHE_ANOMALIES_KEY = "gridguard_cache_anomalies";
+const CACHE_ML_HISTORY_KEY = "gridguard_cache_ml_history";
+
+/**
+ * Ultra-resilient RTDB write helpers:
+ * 1. REST operation writes directly to Firebase Realtime Database over HTTPS.
+ * 2. Concurrently, the Firebase SDK set/update/remove is called with an 800ms timeout
+ *    so it never hangs indefinitely when the WebSocket connection is pending/unauthenticated.
+ */
+export async function rtdbPut<T>(path: string, data: T): Promise<void> {
+  const restPromise = fetch(`${databaseURL}/${path}.json`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(data),
+  }).catch((err) => {
+    if (import.meta.env.DEV) console.warn(`[RTDB REST PUT ${path}]`, err);
+  });
+
+  const sdkPromise = Promise.race([
+    set(ref(rtdb, path), data),
+    new Promise((resolve) => setTimeout(resolve, 800)),
+  ]).catch(() => {});
+
+  await Promise.allSettled([restPromise, sdkPromise]);
+}
+
+export async function rtdbPatch<T>(path: string, patchData: T): Promise<void> {
+  const restPromise = fetch(`${databaseURL}/${path}.json`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(patchData),
+  }).catch((err) => {
+    if (import.meta.env.DEV) console.warn(`[RTDB REST PATCH ${path}]`, err);
+  });
+
+  const sdkPromise = Promise.race([
+    update(ref(rtdb, path), patchData as object),
+    new Promise((resolve) => setTimeout(resolve, 800)),
+  ]).catch(() => {});
+
+  await Promise.allSettled([restPromise, sdkPromise]);
+}
+
+export async function rtdbDelete(path: string): Promise<void> {
+  const restPromise = fetch(`${databaseURL}/${path}.json`, {
+    method: "DELETE",
+  }).catch((err) => {
+    if (import.meta.env.DEV) console.warn(`[RTDB REST DELETE ${path}]`, err);
+  });
+
+  const sdkPromise = Promise.race([
+    remove(ref(rtdb, path)),
+    new Promise((resolve) => setTimeout(resolve, 800)),
+  ]).catch(() => {});
+
+  await Promise.allSettled([restPromise, sdkPromise]);
+}
+
+export async function rtdbFetch<T>(path: string): Promise<T | null> {
+  try {
+    const res = await fetch(`${databaseURL}/${path}.json`);
+    if (!res.ok) return null;
+    return (await res.json()) as T;
+  } catch {
+    return null;
+  }
+}
 
 export const rtdbService = {
   // ==========================================
@@ -93,6 +161,20 @@ export const rtdbService = {
       } catch {}
     }
 
+    // Direct REST fetch on mount to guarantee fresh users even without WebSocket
+    rtdbFetch<Record<string, UserProfile>>("users").then((raw) => {
+      if (raw) {
+        const list = Object.entries(raw).map(([uid, u]) => ({
+          ...u,
+          uid,
+        }));
+        localStorage.setItem(CACHE_USERS_KEY, JSON.stringify(list));
+        callback(list);
+      } else {
+        rtdbService.seedDefaultAdmin();
+      }
+    });
+
     try {
       const usersRef = ref(rtdb, "users");
       return onValue(
@@ -106,21 +188,11 @@ export const rtdbService = {
             }));
             localStorage.setItem(CACHE_USERS_KEY, JSON.stringify(list));
             callback(list);
-          } else {
-            // Seed default admin if empty
-            rtdbService.seedDefaultAdmin();
-            const fallback = localStorage.getItem(CACHE_USERS_KEY);
-            callback(fallback ? JSON.parse(fallback) : []);
           }
         },
-        () => {
-          const fallback = localStorage.getItem(CACHE_USERS_KEY);
-          callback(fallback ? JSON.parse(fallback) : []);
-        }
+        () => {}
       );
     } catch {
-      const fallback = localStorage.getItem(CACHE_USERS_KEY);
-      callback(fallback ? JSON.parse(fallback) : []);
       return () => {};
     }
   },
@@ -143,9 +215,19 @@ export const rtdbService = {
 
   getUserProfile: async (uid: string): Promise<UserProfile | null> => {
     try {
+      const restData = await rtdbFetch<UserProfile>(`users/${uid}`);
+      if (restData) {
+        return { ...restData, uid };
+      }
+    } catch {}
+
+    try {
       const userRef = ref(rtdb, `users/${uid}`);
-      const snap = await get(userRef);
-      if (snap.exists()) {
+      const snap = await Promise.race([
+        get(userRef),
+        new Promise<null>((resolve) => setTimeout(() => resolve(null), 1000)),
+      ]);
+      if (snap && snap.exists()) {
         return { ...snap.val(), uid };
       }
       return null;
@@ -161,24 +243,8 @@ export const rtdbService = {
       lastSeen: new Date().toISOString(),
     };
 
-    // 1. SDK Set
-    try {
-      const userRef = ref(rtdb, `users/${uid}`);
-      await set(userRef, payload);
-    } catch (err) {
-      console.warn("[RTDB] Failed saving user profile via SDK:", err);
-    }
+    await rtdbPut(`users/${uid}`, payload);
 
-    // 2. Direct REST Fallback
-    try {
-      await fetch(`${databaseURL}/users/${uid}.json`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
-    } catch {}
-
-    // 3. LocalStorage Cache
     try {
       const cached = localStorage.getItem(CACHE_USERS_KEY);
       const list: UserProfile[] = cached ? JSON.parse(cached) : [];
@@ -307,19 +373,7 @@ export const rtdbService = {
   },
 
   setUserStatus: async (uid: string, status: "active" | "disabled"): Promise<void> => {
-    try {
-      const userRef = ref(rtdb, `users/${uid}`);
-      await update(userRef, { status });
-    } catch (err) {
-      console.warn("[RTDB] Failed setting user status via SDK:", err);
-    }
-    try {
-      await fetch(`${databaseURL}/users/${uid}.json`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ status }),
-      });
-    } catch {}
+    await rtdbPatch(`users/${uid}`, { status });
     try {
       const cached = localStorage.getItem(CACHE_USERS_KEY);
       if (cached) {
@@ -332,19 +386,7 @@ export const rtdbService = {
 
   setUserRole: async (uid: string, role: "admin" | "member"): Promise<void> => {
     const payload = { role, isAdmin: role === "admin" };
-    try {
-      const userRef = ref(rtdb, `users/${uid}`);
-      await update(userRef, payload);
-    } catch (err) {
-      console.warn("[RTDB] Failed setting user role via SDK:", err);
-    }
-    try {
-      await fetch(`${databaseURL}/users/${uid}.json`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
-    } catch {}
+    await rtdbPatch(`users/${uid}`, payload);
     try {
       const cached = localStorage.getItem(CACHE_USERS_KEY);
       if (cached) {
@@ -356,15 +398,7 @@ export const rtdbService = {
   },
 
   deleteUser: async (uid: string): Promise<void> => {
-    try {
-      const userRef = ref(rtdb, `users/${uid}`);
-      await remove(userRef);
-    } catch (err) {
-      console.warn("[RTDB] Failed deleting user via SDK:", err);
-    }
-    try {
-      await fetch(`${databaseURL}/users/${uid}.json`, { method: "DELETE" });
-    } catch {}
+    await rtdbDelete(`users/${uid}`);
     try {
       const cached = localStorage.getItem(CACHE_USERS_KEY);
       if (cached) {
@@ -436,33 +470,16 @@ export const rtdbService = {
       status: data.status || "ONLINE",
     };
 
-    try {
-      const telRef = ref(rtdb, `telemetry/${nodeId}`);
-      await set(telRef, payload);
-
-      // Also update nodes summary
-      const nodeSummaryRef = ref(rtdb, `nodes/${nodeId}`);
-      await update(nodeSummaryRef, {
-        voltage: payload.voltage,
-        current: payload.current,
-        power: payload.power,
-        energy: payload.energy,
-        temperature: payload.temperature,
-        lastSeen: payload.timestamp,
-        status: payload.status,
-      });
-    } catch {
-      // Direct REST fallback in case SDK socket has authorization backoff
-      try {
-        await fetch(`${databaseURL}/telemetry/${nodeId}.json`, {
-          method: "PUT",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(payload),
-        });
-      } catch {
-        // silent
-      }
-    }
+    await rtdbPut(`telemetry/${nodeId}`, payload);
+    await rtdbPatch(`nodes/${nodeId}`, {
+      voltage: payload.voltage,
+      current: payload.current,
+      power: payload.power,
+      energy: payload.energy,
+      temperature: payload.temperature,
+      lastSeen: payload.timestamp,
+      status: payload.status,
+    });
   },
 
   // ==========================================
@@ -479,6 +496,18 @@ export const rtdbService = {
       } catch {}
     }
 
+    // Direct REST fetch on mount to guarantee fresh nodes even without WebSocket
+    rtdbFetch<Record<string, SolarNode>>("nodes").then((raw) => {
+      if (raw) {
+        const list = Object.entries(raw).map(([nodeId, n]) => ({
+          ...n,
+          nodeId,
+        }));
+        localStorage.setItem(CACHE_NODES_KEY, JSON.stringify(list));
+        callback(list);
+      }
+    });
+
     try {
       const nodesRef = ref(rtdb, "nodes");
       return onValue(
@@ -492,19 +521,11 @@ export const rtdbService = {
             }));
             localStorage.setItem(CACHE_NODES_KEY, JSON.stringify(list));
             callback(list);
-          } else {
-            const fallback = localStorage.getItem(CACHE_NODES_KEY);
-            callback(fallback ? JSON.parse(fallback) : []);
           }
         },
-        () => {
-          const cached = localStorage.getItem(CACHE_NODES_KEY);
-          callback(cached ? JSON.parse(cached) : []);
-        }
+        () => {}
       );
     } catch {
-      const cached = localStorage.getItem(CACHE_NODES_KEY);
-      callback(cached ? JSON.parse(cached) : []);
       return () => {};
     }
   },
@@ -515,19 +536,9 @@ export const rtdbService = {
       nodeId,
       lastSeen: new Date().toISOString(),
     };
-    try {
-      const nodeRef = ref(rtdb, `nodes/${nodeId}`);
-      await set(nodeRef, payload);
-    } catch (err) {
-      console.warn("[RTDB] Failed creating/updating node via SDK:", err);
-    }
-    try {
-      await fetch(`${databaseURL}/nodes/${nodeId}.json`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
-    } catch {}
+
+    await rtdbPut(`nodes/${nodeId}`, payload);
+
     try {
       const cached = localStorage.getItem(CACHE_NODES_KEY);
       const list: SolarNode[] = cached ? JSON.parse(cached) : [];
@@ -536,19 +547,24 @@ export const rtdbService = {
     } catch {}
   },
 
-  deleteNode: async (nodeId: string): Promise<void> => {
+  updateNodeStatus: async (
+    nodeId: string,
+    status: "ONLINE" | "OFFLINE" | "WARNING" | "CRITICAL"
+  ): Promise<void> => {
+    await rtdbPatch(`nodes/${nodeId}`, { status, lastSeen: new Date().toISOString() });
     try {
-      const nodeRef = ref(rtdb, `nodes/${nodeId}`);
-      await remove(nodeRef);
-      const telRef = ref(rtdb, `telemetry/${nodeId}`);
-      await remove(telRef);
-    } catch (err) {
-      console.warn("[RTDB] Failed deleting node via SDK:", err);
-    }
-    try {
-      await fetch(`${databaseURL}/nodes/${nodeId}.json`, { method: "DELETE" });
-      await fetch(`${databaseURL}/telemetry/${nodeId}.json`, { method: "DELETE" });
+      const cached = localStorage.getItem(CACHE_NODES_KEY);
+      if (cached) {
+        const list: SolarNode[] = JSON.parse(cached);
+        const updated = list.map((n) => (n.nodeId === nodeId ? { ...n, status } : n));
+        localStorage.setItem(CACHE_NODES_KEY, JSON.stringify(updated));
+      }
     } catch {}
+  },
+
+  deleteNode: async (nodeId: string): Promise<void> => {
+    await rtdbDelete(`nodes/${nodeId}`);
+    await rtdbDelete(`telemetry/${nodeId}`);
     try {
       const cached = localStorage.getItem(CACHE_NODES_KEY);
       if (cached) {
@@ -572,6 +588,19 @@ export const rtdbService = {
       } catch {}
     }
 
+    // Direct REST fetch on mount to guarantee fresh alerts even without WebSocket
+    rtdbFetch<Record<string, Alert>>("alerts").then((raw) => {
+      if (raw) {
+        const list = Object.entries(raw)
+          .map(([id, a]) => ({ ...a, id }))
+          .sort((a, b) => new Date(String(b.timestamp)).getTime() - new Date(String(a.timestamp)).getTime());
+        localStorage.setItem(CACHE_ALERTS_KEY, JSON.stringify(list));
+        callback(list);
+      } else {
+        rtdbService.seedDefaultAlerts();
+      }
+    });
+
     try {
       const alertsRef = ref(rtdb, "alerts");
       return onValue(
@@ -584,20 +613,11 @@ export const rtdbService = {
               .sort((a, b) => new Date(String(b.timestamp)).getTime() - new Date(String(a.timestamp)).getTime());
             localStorage.setItem(CACHE_ALERTS_KEY, JSON.stringify(list));
             callback(list);
-          } else {
-            rtdbService.seedDefaultAlerts();
-            const fallback = localStorage.getItem(CACHE_ALERTS_KEY);
-            callback(fallback ? JSON.parse(fallback) : []);
           }
         },
-        () => {
-          const cached = localStorage.getItem(CACHE_ALERTS_KEY);
-          callback(cached ? JSON.parse(cached) : []);
-        }
+        () => {}
       );
     } catch {
-      const cached = localStorage.getItem(CACHE_ALERTS_KEY);
-      callback(cached ? JSON.parse(cached) : []);
       return () => {};
     }
   },
@@ -616,14 +636,7 @@ export const rtdbService = {
       acknowledged: false,
       timestamp: new Date().toISOString(),
     };
-    try {
-      await set(ref(rtdb, "alerts/alert-init-01"), initialAlert);
-      await fetch(`${databaseURL}/alerts/alert-init-01.json`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(initialAlert),
-      });
-    } catch {}
+    await rtdbPut("alerts/alert-init-01", initialAlert);
     localStorage.setItem(CACHE_ALERTS_KEY, JSON.stringify([initialAlert]));
   },
 
@@ -634,19 +647,7 @@ export const rtdbService = {
       id,
       timestamp: alertData.timestamp || new Date().toISOString(),
     };
-    try {
-      const alertRef = ref(rtdb, `alerts/${id}`);
-      await set(alertRef, payload);
-    } catch (err) {
-      console.warn("[RTDB] Failed creating alert via SDK:", err);
-    }
-    try {
-      await fetch(`${databaseURL}/alerts/${id}.json`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
-    } catch {}
+    await rtdbPut(`alerts/${id}`, payload);
     try {
       const cached = localStorage.getItem(CACHE_ALERTS_KEY);
       const list: Alert[] = cached ? JSON.parse(cached) : [];
@@ -662,19 +663,7 @@ export const rtdbService = {
       acknowledgedBy: userEmail,
       acknowledgedAt: new Date().toISOString(),
     };
-    try {
-      const alertRef = ref(rtdb, `alerts/${alertId}`);
-      await update(alertRef, patch);
-    } catch (err) {
-      console.warn("[RTDB] Failed acknowledging alert via SDK:", err);
-    }
-    try {
-      await fetch(`${databaseURL}/alerts/${alertId}.json`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(patch),
-      });
-    } catch {}
+    await rtdbPatch(`alerts/${alertId}`, patch);
     try {
       const cached = localStorage.getItem(CACHE_ALERTS_KEY);
       if (cached) {
@@ -691,19 +680,7 @@ export const rtdbService = {
       status: "RESOLVED" as const,
       resolvedAt: new Date().toISOString(),
     };
-    try {
-      const alertRef = ref(rtdb, `alerts/${alertId}`);
-      await update(alertRef, patch);
-    } catch (err) {
-      console.warn("[RTDB] Failed resolving alert via SDK:", err);
-    }
-    try {
-      await fetch(`${databaseURL}/alerts/${alertId}.json`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(patch),
-      });
-    } catch {}
+    await rtdbPatch(`alerts/${alertId}`, patch);
     try {
       const cached = localStorage.getItem(CACHE_ALERTS_KEY);
       if (cached) {
@@ -782,6 +759,19 @@ export const rtdbService = {
       } catch {}
     }
 
+    // Direct REST fetch on mount to guarantee fresh audit logs even without WebSocket
+    rtdbFetch<Record<string, AuditLogEntry>>("auditLogs").then((raw) => {
+      if (raw) {
+        const list = Object.entries(raw)
+          .map(([id, l]) => ({ ...l, id }))
+          .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+        localStorage.setItem(CACHE_LOGS_KEY, JSON.stringify(list));
+        callback(list);
+      } else {
+        rtdbService.seedDefaultAuditLogs();
+      }
+    });
+
     try {
       const auditRef = ref(rtdb, "auditLogs");
       return onValue(
@@ -794,20 +784,11 @@ export const rtdbService = {
               .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
             localStorage.setItem(CACHE_LOGS_KEY, JSON.stringify(list));
             callback(list);
-          } else {
-            rtdbService.seedDefaultAuditLogs();
-            const fallback = localStorage.getItem(CACHE_LOGS_KEY);
-            callback(fallback ? JSON.parse(fallback) : []);
           }
         },
-        () => {
-          const cached = localStorage.getItem(CACHE_LOGS_KEY);
-          callback(cached ? JSON.parse(cached) : []);
-        }
+        () => {}
       );
     } catch {
-      const cached = localStorage.getItem(CACHE_LOGS_KEY);
-      callback(cached ? JSON.parse(cached) : []);
       return () => {};
     }
   },
@@ -843,14 +824,7 @@ export const rtdbService = {
       },
     ];
     for (const l of initialLogs) {
-      try {
-        await set(ref(rtdb, `auditLogs/${l.id}`), l);
-        await fetch(`${databaseURL}/auditLogs/${l.id}.json`, {
-          method: "PUT",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(l),
-        });
-      } catch {}
+      await rtdbPut(`auditLogs/${l.id}`, l);
     }
     localStorage.setItem(CACHE_LOGS_KEY, JSON.stringify(initialLogs));
   },
@@ -872,19 +846,9 @@ export const rtdbService = {
       timestamp: new Date().toISOString(),
       metadata: metadata || {},
     };
-    try {
-      const auditRef = ref(rtdb, `auditLogs/${id}`);
-      await set(auditRef, payload);
-    } catch (err) {
-      console.warn("[RTDB] Failed recording audit log via SDK:", err);
-    }
-    try {
-      await fetch(`${databaseURL}/auditLogs/${id}.json`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
-    } catch {}
+
+    await rtdbPut(`auditLogs/${id}`, payload);
+
     try {
       const cached = localStorage.getItem(CACHE_LOGS_KEY);
       const list: AuditLogEntry[] = cached ? JSON.parse(cached) : [];
@@ -936,6 +900,18 @@ export const rtdbService = {
   // SENSORS MANAGEMENT
   // ==========================================
   subscribeToSensors: (callback: (sensors: SensorData[]) => void): (() => void) => {
+    // Direct REST fetch on mount
+    rtdbFetch<Record<string, SensorData>>("sensors").then((raw) => {
+      if (raw) {
+        const list = Object.entries(raw).map(([id, s]) => ({
+          ...s,
+          id,
+        }));
+        localStorage.setItem("gridguard_cache_sensors", JSON.stringify(list));
+        callback(list);
+      }
+    });
+
     try {
       const sensorsRef = ref(rtdb, "sensors");
       return onValue(
@@ -949,99 +925,52 @@ export const rtdbService = {
             }));
             localStorage.setItem("gridguard_cache_sensors", JSON.stringify(list));
             callback(list);
-          } else {
-            callback([]);
           }
         },
-        () => {
-          const cached = localStorage.getItem("gridguard_cache_sensors");
-          callback(cached ? JSON.parse(cached) : []);
-        }
+        () => {}
       );
     } catch {
-      const cached = localStorage.getItem("gridguard_cache_sensors");
-      callback(cached ? JSON.parse(cached) : []);
       return () => {};
     }
   },
 
   addSensor: async (sensor: Omit<SensorData, "id">): Promise<SensorData> => {
-    try {
-      const sensorsRef = ref(rtdb, "sensors");
-      const newRef = push(sensorsRef);
-      const id = newRef.key || "SN-" + Date.now().toString().slice(-4);
-      const payload: SensorData = {
-        ...sensor,
-        id,
-        lastSeen: new Date().toISOString(),
-      };
-      await set(newRef, payload);
-      return payload;
-    } catch (err) {
-      console.warn("[RTDB] Failed adding sensor:", err);
-      const id = "SN-" + Date.now().toString().slice(-4);
-      return { ...sensor, id, lastSeen: new Date().toISOString() };
-    }
+    const id = "SN-" + Date.now().toString().slice(-4);
+    const payload: SensorData = {
+      ...sensor,
+      id,
+      lastSeen: new Date().toISOString(),
+    };
+    await rtdbPut(`sensors/${id}`, payload);
+    return payload;
   },
 
   updateSensor: async (sensorId: string, data: Partial<SensorData>): Promise<void> => {
-    try {
-      const sensorRef = ref(rtdb, `sensors/${sensorId}`);
-      await update(sensorRef, {
-        ...data,
-        lastSeen: new Date().toISOString(),
-      });
-    } catch (err) {
-      console.warn("[RTDB] Failed updating sensor:", err);
-    }
+    await rtdbPatch(`sensors/${sensorId}`, {
+      ...data,
+      lastSeen: new Date().toISOString(),
+    });
   },
 
   deleteSensor: async (sensorId: string): Promise<void> => {
-    try {
-      const sensorRef = ref(rtdb, `sensors/${sensorId}`);
-      await remove(sensorRef);
-    } catch (err) {
-      console.warn("[RTDB] Failed deleting sensor:", err);
-    }
+    await rtdbDelete(`sensors/${sensorId}`);
   },
 
   saveOtpRecord: async (emailKey: string, payload: any): Promise<void> => {
-    try {
-      const otpRef = ref(rtdb, `auth_otps/${emailKey}`);
-      await set(otpRef, payload);
-    } catch (err) {
-      console.warn("[RTDB] Failed saving OTP via SDK, trying REST:", err);
-      try {
-        await fetch(`${databaseURL}/auth_otps/${emailKey}.json`, {
-          method: "PUT",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(payload),
-        });
-      } catch (restErr) {
-        console.warn("[RTDB] REST OTP save error:", restErr);
-      }
-    }
+    await rtdbPut(`auth_otps/${emailKey}`, payload);
   },
 
   getOtpRecord: async (emailKey: string): Promise<any | null> => {
+    const rest = await rtdbFetch<any>(`auth_otps/${emailKey}`);
+    if (rest) return rest;
     try {
       const otpRef = ref(rtdb, `auth_otps/${emailKey}`);
-      const snap = await get(otpRef);
-      if (snap.exists()) {
-        return snap.val();
-      }
-    } catch (err) {
-      console.warn("[RTDB] Failed getting OTP via SDK, trying REST:", err);
-    }
-
-    try {
-      const res = await fetch(`${databaseURL}/auth_otps/${emailKey}.json`);
-      if (res.ok) {
-        return await res.json();
-      }
-    } catch {
-      // ignore
-    }
+      const snap = await Promise.race([
+        get(otpRef),
+        new Promise<null>((resolve) => setTimeout(() => resolve(null), 1000)),
+      ]);
+      if (snap && snap.exists()) return snap.val();
+    } catch {}
     return null;
   },
 
@@ -1059,54 +988,150 @@ export const rtdbService = {
   },
 
   queueEmailBroadcast: async (payload: any): Promise<void> => {
-    try {
-      const queueRef = ref(rtdb, "email_queue");
-      const newRef = push(queueRef);
-      await set(newRef, {
-        ...payload,
-        queuedAt: new Date().toISOString(),
-        status: "PENDING",
-      });
-    } catch (err) {
-      console.warn("[RTDB] Failed queueing email via SDK, trying REST:", err);
-      try {
-        await fetch(`${databaseURL}/email_queue.json`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            ...payload,
-            queuedAt: new Date().toISOString(),
-            status: "PENDING",
-          }),
-        });
-      } catch (restErr) {
-        console.warn("[RTDB] REST email queue error:", restErr);
-      }
-    }
+    const queueId = `email_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
+    const fullPayload = {
+      ...payload,
+      id: queueId,
+      queuedAt: new Date().toISOString(),
+      status: "PENDING",
+    };
+    await rtdbPut(`email_queue/${queueId}`, fullPayload);
   },
 
   queueOtpDispatch: async (email: string, otp: string): Promise<void> => {
+    const queueId = `otp_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
     const payload = {
+      id: queueId,
       email,
       otp,
       queuedAt: new Date().toISOString(),
       status: "PENDING",
     };
+    await rtdbPut(`otp_dispatch_queue/${queueId}`, payload);
+  },
+
+  // ==========================================
+  // ANOMALY DETECTION & ML RECORDS
+  // ==========================================
+  recordAnomaly: async (anomalyData: Omit<AnomalyRecord, "id"> & { id?: string }): Promise<string> => {
+    const id = anomalyData.id || "anom_" + Date.now();
+    const payload: AnomalyRecord = {
+      ...anomalyData,
+      id,
+      timestamp: anomalyData.timestamp || new Date().toISOString(),
+      status: "ABNORMAL",
+      createdAt: new Date().toISOString(),
+      resolved: anomalyData.resolved ?? false,
+    };
+
+    await rtdbPut(`anomalies/${id}`, payload);
+
     try {
-      const queueRef = ref(rtdb, "otp_dispatch_queue");
-      const newRef = push(queueRef);
-      await set(newRef, payload);
-    } catch (err) {
-      console.warn("[RTDB] Failed queueing OTP dispatch via SDK, trying REST:", err);
+      const cached = localStorage.getItem(CACHE_ANOMALIES_KEY);
+      const list: AnomalyRecord[] = cached ? JSON.parse(cached) : [];
+      const updated = [payload, ...list.filter((a) => a.id !== id)].slice(0, 100);
+      localStorage.setItem(CACHE_ANOMALIES_KEY, JSON.stringify(updated));
+    } catch {}
+
+    return id;
+  },
+
+  subscribeToAnomalies: (callback: (anomalies: AnomalyRecord[]) => void): (() => void) => {
+    const cached = localStorage.getItem(CACHE_ANOMALIES_KEY);
+    if (cached) {
       try {
-        await fetch(`${databaseURL}/otp_dispatch_queue.json`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(payload),
-        });
-      } catch (restErr) {
-        console.warn("[RTDB] REST OTP queue error:", restErr);
+        const parsed = JSON.parse(cached);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          callback(parsed);
+        }
+      } catch {}
+    }
+
+    // Direct REST fetch on mount to guarantee fresh anomalies even without WebSocket
+    rtdbFetch<Record<string, AnomalyRecord>>("anomalies").then((raw) => {
+      if (raw) {
+        const list = Object.entries(raw)
+          .map(([id, a]) => ({ ...a, id }))
+          .sort((a, b) => new Date(String(b.timestamp)).getTime() - new Date(String(a.timestamp)).getTime());
+        localStorage.setItem(CACHE_ANOMALIES_KEY, JSON.stringify(list));
+        callback(list);
       }
+    });
+
+    try {
+      const anomaliesRef = ref(rtdb, "anomalies");
+      return onValue(
+        anomaliesRef,
+        (snapshot) => {
+          if (snapshot.exists()) {
+            const raw = snapshot.val() as Record<string, AnomalyRecord>;
+            const list = Object.entries(raw)
+              .map(([id, a]) => ({ ...a, id }))
+              .sort((a, b) => new Date(String(b.timestamp)).getTime() - new Date(String(a.timestamp)).getTime());
+            localStorage.setItem(CACHE_ANOMALIES_KEY, JSON.stringify(list));
+            callback(list);
+          }
+        },
+        () => {}
+      );
+    } catch {
+      return () => {};
+    }
+  },
+
+  saveMlInference: async (item: InferenceHistoryItem): Promise<void> => {
+    await rtdbPut(`ml_history/${item.id}`, item);
+
+    try {
+      const cached = localStorage.getItem(CACHE_ML_HISTORY_KEY);
+      const list: InferenceHistoryItem[] = cached ? JSON.parse(cached) : [];
+      const updated = [item, ...list.filter((h) => h.id !== item.id)].slice(0, 30);
+      localStorage.setItem(CACHE_ML_HISTORY_KEY, JSON.stringify(updated));
+    } catch {}
+  },
+
+  subscribeToMlHistory: (callback: (history: InferenceHistoryItem[]) => void): (() => void) => {
+    const cached = localStorage.getItem(CACHE_ML_HISTORY_KEY);
+    if (cached) {
+      try {
+        const parsed = JSON.parse(cached);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          callback(parsed);
+        }
+      } catch {}
+    }
+
+    // Direct REST fetch on mount to guarantee fresh ML history even without WebSocket
+    rtdbFetch<Record<string, InferenceHistoryItem>>("ml_history").then((raw) => {
+      if (raw) {
+        const list = Object.entries(raw)
+          .map(([id, h]) => ({ ...h, id }))
+          .sort((a, b) => new Date(String(b.timestamp)).getTime() - new Date(String(a.timestamp)).getTime())
+          .slice(0, 30);
+        localStorage.setItem(CACHE_ML_HISTORY_KEY, JSON.stringify(list));
+        callback(list);
+      }
+    });
+
+    try {
+      const historyRef = ref(rtdb, "ml_history");
+      return onValue(
+        historyRef,
+        (snapshot) => {
+          if (snapshot.exists()) {
+            const raw = snapshot.val() as Record<string, InferenceHistoryItem>;
+            const list = Object.entries(raw)
+              .map(([id, h]) => ({ ...h, id }))
+              .sort((a, b) => new Date(String(b.timestamp)).getTime() - new Date(String(a.timestamp)).getTime())
+              .slice(0, 30);
+            localStorage.setItem(CACHE_ML_HISTORY_KEY, JSON.stringify(list));
+            callback(list);
+          }
+        },
+        () => {}
+      );
+    } catch {
+      return () => {};
     }
   },
 };

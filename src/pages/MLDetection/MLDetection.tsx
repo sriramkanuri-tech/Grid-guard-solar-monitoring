@@ -26,33 +26,12 @@ import {
 } from "lucide-react";
 
 import { mlService } from "../../services/mlService";
+import { mlAutonomousService, type MLAutonomousState } from "../../services/mlAutonomousService";
 import { ML_API_URL } from "../../config";
 import { apiClient } from "../../services/apiClient";
 import { gridDataService } from "../../services/gridDataService";
 import { getStoredUser } from "../../firebase/auth";
-import type { MLPredictionResponse } from "../../types/ml";
-
-interface InferenceHistoryItem {
-  id: string;
-  timestamp: string;
-  inputs: {
-    dc: number;
-    ac: number;
-    ambientTemp: number;
-    moduleTemp: number;
-    irradiation: number;
-    hour: number;
-  };
-  prediction: 1 | -1;
-  status: "NORMAL" | "ABNORMAL";
-  anomalyScore: number;
-  message: string;
-}
-
-interface MLHealthResponse {
-  message: string;
-  model: string;
-}
+import type { MLPredictionResponse, InferenceHistoryItem, MLHealthResponse } from "../../types/ml";
 
 export default function MLDetection() {
   // --------------------------------------------------
@@ -135,231 +114,46 @@ export default function MLDetection() {
     };
   }, []);
 
-  // Synchronize live telemetry values automatically (0 manual entry required)
+  // Synchronize live telemetry & ML inference state from Autonomous Engine
   useEffect(() => {
-    if (!isAutonomous) return;
-
-    const unsub = gridDataService.subscribe((data) => {
-      const acWatts = Math.round(data.solarPower * 1000);
-      const dcWatts = Math.round(data.solarPower * 1.15 * 1000);
-      const ambTemp = Number((data.ambientTemp || 28.5).toFixed(1));
-      const modTemp = Number((data.moduleTemp || 45.2).toFixed(1));
-      const irr = Number(((data.irradiance || 840) / 1000).toFixed(2));
-      const now = new Date();
-      const currentHour = Number((now.getHours() + now.getMinutes() / 60).toFixed(2));
-
-      setDcPower(String(dcWatts));
-      setAcPower(String(acWatts));
-      setAmbientTemp(String(ambTemp));
-      setModuleTemp(String(modTemp));
-      setIrradiation(String(irr));
-      setHour(String(currentHour));
+    const unsub = mlAutonomousService.subscribe((state: MLAutonomousState) => {
+      setServerStatus(state.serverStatus);
+      if (state.latestResult) {
+        setLatestResult(state.latestResult);
+      }
+      setInferenceHistory(state.history);
+      setLastInferenceTick(state.cycleCount);
+      if (state.lastEmailSentTime) {
+        setLastAlertSentTime(state.lastEmailSentTime);
+      }
+      if (isAutonomous) {
+        setDcPower(String(state.currentInputs.dc));
+        setAcPower(String(state.currentInputs.ac));
+        setAmbientTemp(String(state.currentInputs.ambientTemp));
+        setModuleTemp(String(state.currentInputs.moduleTemp));
+        setIrradiation(String(state.currentInputs.irradiation));
+        setHour(String(state.currentInputs.hour));
+      }
     });
 
     return () => unsub();
   }, [isAutonomous]);
 
-  // Automated anomaly email alert to respected user
-  const triggerAutonomousEmailAlert = async (
-    result: MLPredictionResponse,
-    metrics: { dc: number; ac: number; ambient: number; module: number; irradiation: number }
-  ) => {
-    const now = Date.now();
-    // 60-second cooldown between automated emails to avoid inbox spam
-    if (now - lastEmailAlertTimestamp.current < 60000) {
-      return;
-    }
-    lastEmailAlertTimestamp.current = now;
-
-    const user = getStoredUser();
-    const targetEmail = user?.email || "sriramkanuri4@gmail.com";
-
-    const subject = `🚨 CRITICAL ALERT: Solar Anomaly Detected on Node GG-NODE-01`;
-    const message = `GRID GUARD AUTONOMOUS ISOLATION FOREST ADVISORY
-==================================================
-Anomaly Alert: Abnormal Generation Disparity Detected
-Monitoring Node: GG-NODE-01
-Timestamp: ${new Date().toLocaleString()}
-
-TELEMETRY VECTOR:
-• DC String Output: ${metrics.dc} W
-• Inverter AC Generation: ${metrics.ac} W
-• Inverter Efficiency Ratio: ${((metrics.ac / (metrics.dc || 1)) * 100).toFixed(1)}%
-• Module Temperature: ${metrics.module} °C
-• Ambient Temperature: ${metrics.ambient} °C
-• Solar Irradiance: ${metrics.irradiation} kW/m²
-
-ISOLATION FOREST INFERENCE:
-• Status: ABNORMAL (Prediction Vector: -1)
-• Outlier Score: ${result.anomaly_score.toFixed(5)}
-• Diagnosis: ${result.message}
-
-RECOMMENDED ACTION:
-1. Inspect inverter DC string fuses and MPPT tracking efficiency.
-2. Check module junction thermal sensors for localized hotspot degradation.
-3. Review live telemetry in the Grid Guard Control Console: https://gridguardsolarmonitoring.web.app
-
-Dispatched automatically by Grid Guard ML Autonomous Engine to: ${targetEmail}`;
-
-    const htmlMessage = `<div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 600px; margin: 0 auto; background: #030712; color: #f8fafc; border-radius: 12px; border: 1px solid #1e293b; overflow: hidden;">
-      <div style="background: linear-gradient(135deg, #dc2626 0%, #991b1b 100%); padding: 24px; text-align: center;">
-        <span style="display:inline-block; font-size: 32px; margin-bottom: 8px;">🚨</span>
-        <h1 style="margin: 0; color: #ffffff; font-size: 20px; font-weight: 800; letter-spacing: 0.5px;">CRITICAL SOLAR ANOMALY DETECTED</h1>
-        <p style="margin: 4px 0 0 0; color: #fecaca; font-size: 13px;">Node GG-NODE-01 &bull; Autonomous Isolation Forest Engine</p>
-      </div>
-      <div style="padding: 24px;">
-        <div style="background: #0f172a; border: 1px solid #334155; border-radius: 8px; padding: 16px; margin-bottom: 20px;">
-          <h3 style="margin: 0 0 12px 0; color: #38bdf8; font-size: 14px; text-transform: uppercase; letter-spacing: 1px;">Telemetry Vector</h3>
-          <table style="width: 100%; border-collapse: collapse; font-size: 13px;">
-            <tr><td style="color: #94a3b8; padding: 4px 0;">DC String Output:</td><td style="color: #f8fafc; font-weight: bold; text-align: right;">${metrics.dc} W</td></tr>
-            <tr><td style="color: #94a3b8; padding: 4px 0;">Inverter AC Generation:</td><td style="color: #f8fafc; font-weight: bold; text-align: right;">${metrics.ac} W</td></tr>
-            <tr><td style="color: #94a3b8; padding: 4px 0;">Efficiency Ratio:</td><td style="color: #f8fafc; font-weight: bold; text-align: right;">${((metrics.ac / (metrics.dc || 1)) * 100).toFixed(1)}%</td></tr>
-            <tr><td style="color: #94a3b8; padding: 4px 0;">Module Temperature:</td><td style="color: #ef4444; font-weight: bold; text-align: right;">${metrics.module} °C</td></tr>
-            <tr><td style="color: #94a3b8; padding: 4px 0;">Ambient Temperature:</td><td style="color: #f8fafc; font-weight: bold; text-align: right;">${metrics.ambient} °C</td></tr>
-            <tr><td style="color: #94a3b8; padding: 4px 0;">Solar Irradiance:</td><td style="color: #f8fafc; font-weight: bold; text-align: right;">${metrics.irradiation} kW/m²</td></tr>
-          </table>
-        </div>
-        <div style="background: rgba(220, 38, 38, 0.1); border: 1px solid rgba(220, 38, 38, 0.3); border-radius: 8px; padding: 16px; margin-bottom: 20px;">
-          <div style="color: #f87171; font-weight: bold; font-size: 14px; margin-bottom: 6px;">Evaluation: ABNORMAL (Score: ${result.anomaly_score.toFixed(5)})</div>
-          <div style="color: #cbd5e1; font-size: 13px;">${result.message}</div>
-        </div>
-        <div style="text-align: center; margin: 24px 0;">
-          <a href="https://gridguardsolarmonitoring.web.app" style="display: inline-block; background: #dc2626; color: #ffffff; text-decoration: none; padding: 12px 28px; border-radius: 8px; font-weight: bold; font-size: 14px;">Open Monitoring Console</a>
-        </div>
-      </div>
-      <div style="background: #0f172a; padding: 16px; text-align: center; border-top: 1px solid #1e293b; font-size: 11px; color: #64748b;">
-        Dispatched automatically to ${targetEmail} &bull; Grid Guard Solar Monitoring
-      </div>
-    </div>`;
-
-    try {
-      await apiClient.sendEmail({
-        recipients: [targetEmail],
-        subject,
-        message,
-        html_message: htmlMessage,
-      });
-
-      const timeStr = new Date().toLocaleTimeString();
-      setLastAlertSentTime(timeStr);
-      setLastAlertRecipient(targetEmail);
-      setAlertDispatchToast(`Automated anomaly advisory dispatched to ${targetEmail} at ${timeStr}`);
-      setTimeout(() => setAlertDispatchToast(null), 8000);
-    } catch (e: any) {
-      if (import.meta.env.DEV) {
-        console.warn("[ML Alert] Failed to dispatch automated alert email:", e);
-      }
-      setAlertDispatchToast("Unable to connect to Grid Guard server for alert dispatch.");
-      setTimeout(() => setAlertDispatchToast(null), 6000);
-    }
+  const handleToggleAutonomous = () => {
+    const next = !isAutonomous;
+    setIsAutonomous(next);
+    mlAutonomousService.setAutonomous(next);
   };
 
-  // Autonomous continuous evaluation loop (runs every 3 seconds on live telemetry)
-  useEffect(() => {
-    if (!isAutonomous) return;
-
-    const runAutonomousInference = async () => {
-      const numDc = Number(dcPower) || 4820;
-      const numAc = Number(acPower) || 4580;
-      const numAmbient = Number(ambientTemp) || 28.5;
-      const numModule = Number(moduleTemp) || 45.2;
-      const numIrradiation = Number(irradiation) || 0.84;
-      const numHour = Number(hour) || 12.0;
-
-      try {
-        const result = await mlService.predict({
-          DC_POWER: numDc,
-          AC_POWER: numAc,
-          AMBIENT_TEMPERATURE: numAmbient,
-          MODULE_TEMPERATURE: numModule,
-          IRRADIATION: numIrradiation,
-          hour: numHour,
-        });
-
-        setLatestResult(result);
-        setLastInferenceTick((t) => t + 1);
-
-        const historyRecord: InferenceHistoryItem = {
-          id: `inf-${Date.now()}`,
-          timestamp: result.timestamp || new Date().toLocaleTimeString(),
-          inputs: {
-            dc: numDc,
-            ac: numAc,
-            ambientTemp: numAmbient,
-            moduleTemp: numModule,
-            irradiation: numIrradiation,
-            hour: numHour,
-          },
-          prediction: result.prediction,
-          status: result.status,
-          anomalyScore: result.anomaly_score,
-          message: result.message,
-        };
-
-        setInferenceHistory((prev) => [historyRecord, ...prev.slice(0, 9)]);
-
-        // IF ABNORMAL DETECTED: AUTO SEND ALERT EMAIL TO RESPECTED USER
-        if (result.is_anomaly || result.status === "ABNORMAL") {
-          await triggerAutonomousEmailAlert(result, {
-            dc: numDc,
-            ac: numAc,
-            ambient: numAmbient,
-            module: numModule,
-            irradiation: numIrradiation,
-          });
-        }
-      } catch (err) {
-        console.warn("[ML Autonomous Inference]", err);
-      }
-    };
-
-    const timer = setInterval(runAutonomousInference, 3000);
-    return () => clearInterval(timer);
-  }, [isAutonomous, serverStatus, dcPower, acPower, ambientTemp, moduleTemp, irradiation, hour]);
-
-  // Simulate Fault Injection to test instant abnormal email dispatch
+  // Simulate Fault Injection to test instant abnormal detection & database persistence
   const handleTestAbnormalAlert = async () => {
     setIsInjectingFault(true);
-    const abnormalDc = 8800;
-    const abnormalAc = 450;
-    const abnormalAmb = 36.5;
-    const abnormalMod = 92.0;
-    const abnormalIrr = 0.98;
-    const abnormalHour = 13.0;
-
-    setDcPower(String(abnormalDc));
-    setAcPower(String(abnormalAc));
-    setAmbientTemp(String(abnormalAmb));
-    setModuleTemp(String(abnormalMod));
-    setIrradiation(String(abnormalIrr));
-    setHour(String(abnormalHour));
-
-    try {
-      const result = await mlService.predict({
-        DC_POWER: abnormalDc,
-        AC_POWER: abnormalAc,
-        AMBIENT_TEMPERATURE: abnormalAmb,
-        MODULE_TEMPERATURE: abnormalMod,
-        IRRADIATION: abnormalIrr,
-        hour: abnormalHour,
-      });
-
-      setLatestResult(result);
-      // Reset cooldown so test alert always emails immediately
-      lastEmailAlertTimestamp.current = 0;
-      await triggerAutonomousEmailAlert(result, {
-        dc: abnormalDc,
-        ac: abnormalAc,
-        ambient: abnormalAmb,
-        module: abnormalMod,
-        irradiation: abnormalIrr,
-      });
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : "Inference error.";
-      setErrorMessage(msg);
-    } finally {
+    setAlertDispatchToast("Simulating abnormal disparity: saving to RTDB /anomalies, /alerts & dispatching email...");
+    mlAutonomousService.triggerTestAnomaly();
+    setTimeout(() => {
       setIsInjectingFault(false);
-    }
+      setAlertDispatchToast(null);
+    }, 6000);
   };
 
   // --------------------------------------------------
@@ -430,36 +224,19 @@ Dispatched automatically by Grid Guard ML Autonomous Engine to: ${targetEmail}`;
     setIsLoading(true);
 
     try {
-      const result = await mlService.predict({
-        DC_POWER: numDc,
-        AC_POWER: numAc,
-        AMBIENT_TEMPERATURE: numAmbient,
-        MODULE_TEMPERATURE: numModule,
-        IRRADIATION: numIrradiation,
+      const result = await mlAutonomousService.runInferenceCycle({
+        dc: numDc,
+        ac: numAc,
+        ambientTemp: numAmbient,
+        moduleTemp: numModule,
+        irradiation: numIrradiation,
         hour: numHour,
       });
 
-      setLatestResult(result);
-      setServerStatus("online");
-
-      const historyRecord: InferenceHistoryItem = {
-        id: `inf-${Date.now()}`,
-        timestamp: result.timestamp || new Date().toLocaleTimeString(),
-        inputs: {
-          dc: numDc,
-          ac: numAc,
-          ambientTemp: numAmbient,
-          moduleTemp: numModule,
-          irradiation: numIrradiation,
-          hour: numHour,
-        },
-        prediction: result.prediction,
-        status: result.status,
-        anomalyScore: result.anomaly_score,
-        message: result.message,
-      };
-
-      setInferenceHistory((previous) => [historyRecord, ...previous.slice(0, 9)]);
+      if (result) {
+        setLatestResult(result);
+        setServerStatus("online");
+      }
     } catch (error: unknown) {
       const message =
         error instanceof Error
@@ -706,7 +483,7 @@ Dispatched automatically by Grid Guard ML Autonomous Engine to: ${targetEmail}`;
               <div className="flex items-center gap-2">
                 <button
                   type="button"
-                  onClick={() => setIsAutonomous(!isAutonomous)}
+                  onClick={handleToggleAutonomous}
                   className={`flex items-center gap-1.5 rounded-xl px-3 py-1.5 text-xs font-semibold transition active:scale-95 border ${
                     isAutonomous
                       ? "border-lime-400/40 bg-lime-400/15 text-lime-300 hover:bg-lime-400/25"
@@ -722,10 +499,10 @@ Dispatched automatically by Grid Guard ML Autonomous Engine to: ${targetEmail}`;
                   onClick={handleTestAbnormalAlert}
                   disabled={isInjectingFault}
                   className="flex items-center gap-1.5 rounded-xl border border-rose-500/40 bg-rose-500/15 px-3 py-1.5 text-xs font-bold text-rose-300 hover:bg-rose-500/25 transition active:scale-95 disabled:opacity-50"
-                  title="Inject an abnormal telemetry spike to test the automated alert email dispatch immediately"
+                  title="Simulate an abnormal solar disparity to trigger ML anomaly detection, persist data in Firebase RTDB, and send alert email"
                 >
                   <Flame size={12} className={isInjectingFault ? "animate-bounce" : ""} />
-                  <span>{isInjectingFault ? "Simulating..." : "Test Anomaly Email"}</span>
+                  <span>{isInjectingFault ? "Simulating..." : "Simulate Anomaly Fault"}</span>
                 </button>
               </div>
             </div>

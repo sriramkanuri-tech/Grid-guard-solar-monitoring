@@ -21,3 +21,47 @@ export interface MLHealthResponse {
   message: string;
   model: string;
 }
+
+export interface InferenceHistoryItem {
+  id: string;
+  timestamp: string;
+  inputs: {
+    dc: number;
+    ac: number;
+    ambientTemp: number;
+    moduleTemp: number;
+    irradiation: number;
+    hour: number;
+  };
+  prediction: 1 | -1;
+  status: "NORMAL" | "ABNORMAL";
+  anomalyScore: number;
+  message: string;
+}
+
+export interface AnomalyRecord {
+  id: string;
+  nodeId: string;
+  timestamp: string;
+  status: "ABNORMAL";
+  prediction: number;
+  anomalyScore: number;
+  message: string;
+  inputs: {
+    dc: number;
+    ac: number;
+    ambientTemp: number;
+    moduleTemp: number;
+    irradiation: number;
+    hour: number;
+  };
+  metrics?: {
+    acDcRatio: number;
+    tempDisparity?: number;
+  };
+  emailAlertSent: boolean;
+  alertRecipient?: string;
+  alertId?: string;
+  resolved: boolean;
+  createdAt?: string;
+}
