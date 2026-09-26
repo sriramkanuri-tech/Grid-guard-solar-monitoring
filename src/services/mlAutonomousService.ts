@@ -14,6 +14,7 @@ export interface MLAutonomousState {
   serverStatus: "online" | "offline" | "checking";
   lastAnomalyTime: string | null;
   lastEmailSentTime: string | null;
+  stopMlDetectionMails: boolean;
   currentInputs: {
     dc: number;
     ac: number;
@@ -37,6 +38,7 @@ class MLAutonomousService {
   private lastEmailSentTime: string | null = null;
   private serverStatus: "online" | "offline" | "checking" = "checking";
   private isEvaluating: boolean = false;
+  private stopMlDetectionMails: boolean = false;
 
   constructor() {
     // Initial state from cached history if available
@@ -49,6 +51,30 @@ class MLAutonomousService {
         }
       } catch {}
     }
+
+    // Load initial ML detection mail suppression preference
+    const cachedStopMails = localStorage.getItem("gridguard_stop_ml_detection_mails");
+    if (cachedStopMails !== null) {
+      try {
+        this.stopMlDetectionMails = JSON.parse(cachedStopMails);
+      } catch {}
+    }
+
+    rtdbService.getMlDetectionEmailsStopped().then((stopped) => {
+      if (typeof stopped === "boolean") {
+        this.stopMlDetectionMails = stopped;
+        this.notifyListeners();
+      }
+    });
+
+    // Subscribe to system settings in RTDB to reflect changes in real-time across all clients
+    rtdbService.subscribeToSystem((state) => {
+      if (state && typeof state.stopMlDetectionMails === "boolean") {
+        this.stopMlDetectionMails = state.stopMlDetectionMails;
+        localStorage.setItem("gridguard_stop_ml_detection_mails", JSON.stringify(state.stopMlDetectionMails));
+        this.notifyListeners();
+      }
+    });
 
     // Subscribe to RTDB ml_history to keep persistent history synced across all tabs/users
     rtdbService.subscribeToMlHistory((rtdbHistory) => {
@@ -102,6 +128,27 @@ class MLAutonomousService {
   public setAutonomous(active: boolean) {
     this.isAutonomous = active;
     this.notifyListeners();
+  }
+
+  public async setStopMlDetectionMails(stopped: boolean): Promise<void> {
+    this.stopMlDetectionMails = stopped;
+    localStorage.setItem("gridguard_stop_ml_detection_mails", JSON.stringify(stopped));
+    this.notifyListeners();
+    await rtdbService.setMlDetectionEmailsStopped(stopped);
+    try {
+      const user = getStoredUser();
+      await rtdbService.logAuditEvent(
+        stopped ? "ML_DETECTION_MAILS_STOPPED" : "ML_DETECTION_MAILS_RESUMED",
+        "ML_DETECTION_PAGE",
+        { stopMlDetectionMails: stopped },
+        user?.uid || "operator",
+        user?.email || "operator"
+      );
+    } catch {}
+  }
+
+  public getStopMlDetectionMails(): boolean {
+    return this.stopMlDetectionMails;
   }
 
   public async runInferenceCycle(
@@ -288,7 +335,15 @@ class MLAutonomousService {
       await rtdbService.updateNodeStatus("GG-NODE-01", "CRITICAL");
     } catch {}
 
-    // 5. DISPATCH EMAIL ADVISORY TO RECIPIENTS (Protected by 25s cooldown)
+    // 5. DISPATCH EMAIL ADVISORY TO RECIPIENTS (Protected by 25s cooldown & stop toggle)
+    if (this.stopMlDetectionMails) {
+      console.log("[MLAutonomousService] ML Detection emails are STOPPED by operator. Skipping email advisory.");
+      anomalyPayload.emailAlertSent = false;
+      anomalyPayload.alertRecipient = "Suppressed (ML Detection emails stopped by operator)";
+      rtdbService.recordAnomaly(anomalyPayload).catch(() => {});
+      return;
+    }
+
     const now = Date.now();
     if (now - this.lastEmailAlertTimestamp >= 25000) {
       this.lastEmailAlertTimestamp = now;
@@ -386,6 +441,7 @@ Dispatched automatically by Grid Guard ML Autonomous Engine to: ${recipients.joi
       serverStatus: this.serverStatus,
       lastAnomalyTime: this.lastAnomalyTime,
       lastEmailSentTime: this.lastEmailSentTime,
+      stopMlDetectionMails: this.stopMlDetectionMails,
       currentInputs: {
         dc: vector.dcPower,
         ac: vector.acPower,

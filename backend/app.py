@@ -867,6 +867,21 @@ def autonomous_ml_evaluator_24h():
                     last_24h_email_sent = now_epoch
                     anom_id = f"anom_24h_{int(now_epoch * 1000)}"
 
+                    # Check if operator stopped ML detection mails
+                    stop_ml_mails = False
+                    try:
+                        s_res = session.get(f"{RTDB_BASE_URL}/systemSettings/stop_ml_detection_mails.json", timeout=3)
+                        if s_res.status_code == 200 and s_res.json() is True:
+                            stop_ml_mails = True
+                        if not stop_ml_mails:
+                            sys_res = session.get(f"{RTDB_BASE_URL}/system.json", timeout=3)
+                            if sys_res.status_code == 200 and sys_res.json():
+                                sj = sys_res.json()
+                                if sj.get("stopMlDetectionMails") is True or (isinstance(sj.get("state"), dict) and sj["state"].get("stopMlDetectionMails") is True):
+                                    stop_ml_mails = True
+                    except Exception:
+                        pass
+
                     # 1. Harvest ALL registered & active operator emails
                     recipients = [os.getenv("ADMIN_EMAIL", "sriramkanuri4@gmail.com")]
                     try:
@@ -895,8 +910,6 @@ def autonomous_ml_evaluator_24h():
                         str(r).strip().lower() for r in recipients if r and "@" in str(r)
                     ]))
 
-                    print(f"[24/7 ML Engine] ABNORMAL condition flagged (Score: {score:.5f}). Notifying operators: {recipients}", flush=True)
-
                     # 2. Persist Anomaly in RTDB
                     anom_payload = {
                         "id": anom_id,
@@ -911,8 +924,8 @@ def autonomous_ml_evaluator_24h():
                             "acDcRatio": round((ac_power / dc_power), 3) if dc_power > 0 else 0,
                             "tempDisparity": round(mod_temp - amb_temp, 1),
                         },
-                        "emailAlertSent": True,
-                        "alertRecipient": ", ".join(recipients),
+                        "emailAlertSent": not stop_ml_mails,
+                        "alertRecipient": ", ".join(recipients) if not stop_ml_mails else "Suppressed (ML Detection emails stopped via MLDetection page)",
                         "resolved": False,
                         "createdAt": now_iso,
                     }
@@ -941,6 +954,12 @@ def autonomous_ml_evaluator_24h():
                         session.put(f"{RTDB_BASE_URL}/alerts/{alert_id}.json", json=alert_payload, timeout=6)
                     except Exception:
                         pass
+
+                    if stop_ml_mails:
+                        print(f"[24/7 ML Engine] ABNORMAL condition flagged (Score: {score:.5f}), but ML Detection emails are STOPPED in settings. Email suppressed.", flush=True)
+                        continue
+
+                    print(f"[24/7 ML Engine] ABNORMAL condition flagged (Score: {score:.5f}). Notifying operators: {recipients}", flush=True)
 
                     # 4. Dispatch Email to all respected users
                     subject = "🚨 CRITICAL ALERT: Solar Anomaly Detected on Node GG-NODE-01"
@@ -1139,6 +1158,33 @@ def manual_rtdb_seed():
         "status": rtdb_sync_state["status"],
         "last_error": rtdb_sync_state["last_error"],
     }
+
+
+@app.get("/api/ml/email-settings")
+def get_ml_email_settings():
+    session = requests.Session()
+    session.headers.update({"Connection": "close"})
+    try:
+        res = session.get(f"{RTDB_BASE_URL}/systemSettings/stop_ml_detection_mails.json", timeout=3)
+        stopped = (res.status_code == 200 and res.json() is True)
+        return {"stop_ml_detection_mails": stopped}
+    except Exception as e:
+        return {"stop_ml_detection_mails": False, "error": str(e)}
+
+
+@app.post("/api/ml/toggle-emails")
+def toggle_ml_emails(payload: dict = None):
+    session = requests.Session()
+    session.headers.update({"Connection": "close"})
+    stopped = True
+    if payload and "stop_ml_detection_mails" in payload:
+        stopped = bool(payload["stop_ml_detection_mails"])
+    try:
+        session.put(f"{RTDB_BASE_URL}/systemSettings/stop_ml_detection_mails.json", json=stopped, timeout=3)
+        session.patch(f"{RTDB_BASE_URL}/system.json", json={"stopMlDetectionMails": stopped}, timeout=3)
+        return {"success": True, "stop_ml_detection_mails": stopped}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
 
 
 if __name__ == "__main__":

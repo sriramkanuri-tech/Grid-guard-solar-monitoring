@@ -17,7 +17,9 @@ import {
   CheckCircle2,
   Radio,
   Bell,
+  BellOff,
   Mail,
+  MailX,
   Send,
   Play,
   Pause,
@@ -53,6 +55,11 @@ export default function MLDetection() {
   const [lastAlertRecipient, setLastAlertRecipient] = useState<string | null>(null);
   const [alertDispatchToast, setAlertDispatchToast] = useState<string | null>(null);
   const [isInjectingFault, setIsInjectingFault] = useState(false);
+  const [stopMlDetectionMails, setStopMlDetectionMails] = useState<boolean>(() => {
+    const cached = localStorage.getItem("gridguard_stop_ml_detection_mails");
+    return cached ? JSON.parse(cached) : false;
+  });
+  const [isTogglingMails, setIsTogglingMails] = useState(false);
   const lastEmailAlertTimestamp = useRef<number>(0);
 
   // --------------------------------------------------
@@ -126,6 +133,9 @@ export default function MLDetection() {
       if (state.lastEmailSentTime) {
         setLastAlertSentTime(state.lastEmailSentTime);
       }
+      if (typeof state.stopMlDetectionMails === "boolean") {
+        setStopMlDetectionMails(state.stopMlDetectionMails);
+      }
       if (isAutonomous) {
         setDcPower(String(state.currentInputs.dc));
         setAcPower(String(state.currentInputs.ac));
@@ -145,10 +155,36 @@ export default function MLDetection() {
     mlAutonomousService.setAutonomous(next);
   };
 
+  const handleToggleMlDetectionMails = async () => {
+    if (isTogglingMails) return;
+    setIsTogglingMails(true);
+    const nextState = !stopMlDetectionMails;
+    setStopMlDetectionMails(nextState);
+    try {
+      await mlAutonomousService.setStopMlDetectionMails(nextState);
+      setAlertDispatchToast(
+        nextState
+          ? "ML Detection alert emails STOPPED. Telemetry evaluations and database logging remain active, but email dispatches are muted."
+          : "ML Detection alert emails RESUMED. Automated email dispatches to registered operators are now active."
+      );
+    } catch {
+      setAlertDispatchToast("Failed to update email setting. Please check network connection.");
+    } finally {
+      setIsTogglingMails(false);
+      setTimeout(() => {
+        setAlertDispatchToast(null);
+      }, 5000);
+    }
+  };
+
   // Simulate Fault Injection to test instant abnormal detection & database persistence
   const handleTestAbnormalAlert = async () => {
     setIsInjectingFault(true);
-    setAlertDispatchToast("Simulating abnormal disparity: saving to RTDB /anomalies, /alerts & dispatching email...");
+    setAlertDispatchToast(
+      stopMlDetectionMails
+        ? "Simulating abnormal disparity: saving to RTDB /anomalies & /alerts (Emails currently STOPPED)..."
+        : "Simulating abnormal disparity: saving to RTDB /anomalies, /alerts & dispatching email..."
+    );
     mlAutonomousService.triggerTestAnomaly();
     setTimeout(() => {
       setIsInjectingFault(false);
@@ -469,18 +505,54 @@ export default function MLDetection() {
                     </span>
                   </h3>
                   <p className="text-[11px] text-slate-300 mt-0.5 flex items-center gap-1.5 font-mono">
-                    <Mail size={12} className="text-lime-400" />
-                    <span>
-                      Auto-Mailing to:{" "}
-                      <strong className="text-white">
-                        {getStoredUser()?.email || "sriramkanuri4@gmail.com"}
-                      </strong>
-                    </span>
+                    {stopMlDetectionMails ? (
+                      <>
+                        <MailX size={12} className="text-amber-400" />
+                        <span className="text-amber-300 font-semibold">
+                          ML Anomaly Emails: <span className="underline">STOPPED</span>
+                        </span>
+                        <span className="text-slate-400 text-[10px] hidden sm:inline">(telemetry saved to DB; emails muted)</span>
+                      </>
+                    ) : (
+                      <>
+                        <Mail size={12} className="text-lime-400" />
+                        <span>
+                          Auto-Mailing to:{" "}
+                          <strong className="text-white">
+                            {getStoredUser()?.email || "sriramkanuri4@gmail.com"}
+                          </strong>
+                        </span>
+                      </>
+                    )}
                   </p>
                 </div>
               </div>
 
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={handleToggleMlDetectionMails}
+                  disabled={isTogglingMails}
+                  className={`flex items-center gap-1.5 rounded-xl px-3 py-1.5 text-xs font-bold transition active:scale-95 border ${
+                    stopMlDetectionMails
+                      ? "border-emerald-500/50 bg-emerald-500/15 text-emerald-300 hover:bg-emerald-500/25"
+                      : "border-amber-500/50 bg-amber-500/15 text-amber-300 hover:bg-amber-500/25"
+                  }`}
+                  title={stopMlDetectionMails ? "Resume sending ML detection alert emails" : "Stop sending ML detection alert emails"}
+                >
+                  {stopMlDetectionMails ? (
+                    <>
+                      <Mail size={12} className="text-emerald-400" />
+                      <span>Resume ML Emails</span>
+                    </>
+                  ) : (
+                    <>
+                      <MailX size={12} className="text-amber-400" />
+                      <span>Stop ML Emails</span>
+                    </>
+                  )}
+                </button>
+
                 <button
                   type="button"
                   onClick={handleToggleAutonomous}
@@ -491,7 +563,7 @@ export default function MLDetection() {
                   }`}
                 >
                   {isAutonomous ? <Pause size={12} /> : <Play size={12} />}
-                  <span>{isAutonomous ? "Pause Auto Stream" : "Resume Auto Stream"}</span>
+                  <span>{isAutonomous ? "Pause Stream" : "Resume Stream"}</span>
                 </button>
 
                 <button
@@ -502,7 +574,7 @@ export default function MLDetection() {
                   title="Simulate an abnormal solar disparity to trigger ML anomaly detection, persist data in Firebase RTDB, and send alert email"
                 >
                   <Flame size={12} className={isInjectingFault ? "animate-bounce" : ""} />
-                  <span>{isInjectingFault ? "Simulating..." : "Simulate Anomaly Fault"}</span>
+                  <span>{isInjectingFault ? "Simulating..." : "Simulate Anomaly"}</span>
                 </button>
               </div>
             </div>
@@ -762,33 +834,9 @@ export default function MLDetection() {
                     </span>
                   </div>
                 </div>
-
-                {/* AUTOMATED EMAIL DISPATCH STATUS BOX */}
-                <div className="rounded-xl border border-slate-800 bg-slate-950/70 p-3 text-xs space-y-1.5 font-sans">
-                  <div className="flex items-center justify-between">
-                    <span className="text-slate-400 font-medium flex items-center gap-1.5">
-                      <Mail size={13} className="text-amber-400" />
-                      <span>Automated Anomaly Alerting:</span>
-                    </span>
-                    <span className="text-emerald-400 font-mono font-bold flex items-center gap-1">
-                      <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse" />
-                      Armed
-                    </span>
-                  </div>
-                  <div className="flex items-center justify-between text-[11px] text-slate-400 font-mono border-t border-slate-800/60 pt-1.5">
-                    <span>Target:</span>
-                    <span className="text-slate-200">{getStoredUser()?.email || "sriramkanuri4@gmail.com"}</span>
-                  </div>
-                  {lastAlertSentTime && (
-                    <div className="flex items-center justify-between text-[11px] text-rose-300 font-mono border-t border-slate-800/60 pt-1.5">
-                      <span>Last Alert:</span>
-                      <span className="font-bold">{lastAlertSentTime}</span>
-                    </div>
-                  )}
-                </div>
               </div>
             ) : (
-              <div className="rounded-xl border border-dashed border-slate-800 bg-[#07111F]/50 p-10 text-center flex flex-col items-center justify-center">
+              <div className="rounded-xl border border-dashed border-slate-800 bg-[#07111F]/50 p-8 text-center flex flex-col items-center justify-center">
                 <div className="h-12 w-12 rounded-2xl bg-slate-800/80 flex items-center justify-center text-slate-400 mb-3 border border-slate-700/80">
                   <Activity size={22} />
                 </div>
@@ -798,6 +846,84 @@ export default function MLDetection() {
                 </p>
               </div>
             )}
+
+            {/* AUTOMATED EMAIL DISPATCH STATUS & CONTROL BOX */}
+            <div
+              className={`mt-5 rounded-xl border p-3.5 text-xs space-y-2 font-sans transition-all ${
+                stopMlDetectionMails
+                  ? "border-amber-500/40 bg-amber-950/20"
+                  : "border-slate-800 bg-slate-950/70"
+              }`}
+            >
+              <div className="flex items-center justify-between">
+                <span className="text-slate-300 font-medium flex items-center gap-1.5">
+                  {stopMlDetectionMails ? (
+                    <MailX size={14} className="text-amber-400" />
+                  ) : (
+                    <Mail size={14} className="text-emerald-400" />
+                  )}
+                  <span className="font-semibold text-white">ML Detection Emails</span>
+                </span>
+                <span
+                  className={`font-mono font-bold flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-full border ${
+                    stopMlDetectionMails
+                      ? "bg-amber-500/10 text-amber-300 border-amber-500/30"
+                      : "bg-emerald-500/10 text-emerald-400 border-emerald-500/30"
+                  }`}
+                >
+                  <span
+                    className={`h-1.5 w-1.5 rounded-full ${
+                      stopMlDetectionMails ? "bg-amber-400" : "bg-emerald-400 animate-pulse"
+                    }`}
+                  />
+                  {stopMlDetectionMails ? "EMAILS STOPPED" : "EMAILS ACTIVE"}
+                </span>
+              </div>
+
+              <div className="flex items-center justify-between text-[11px] text-slate-400 font-mono border-t border-slate-800/60 pt-1.5">
+                <span>Alert Dispatch:</span>
+                <span className={stopMlDetectionMails ? "text-amber-300 font-semibold" : "text-emerald-300"}>
+                  {stopMlDetectionMails ? "Muted (No Emails Sent)" : "Broadcasting to Operators"}
+                </span>
+              </div>
+
+              <div className="flex items-center justify-between text-[11px] text-slate-400 font-mono">
+                <span>Recipients:</span>
+                <span className="text-slate-200 truncate max-w-[170px]">
+                  {stopMlDetectionMails ? "Muted" : (getStoredUser()?.email || "sriramkanuri4@gmail.com")}
+                </span>
+              </div>
+
+              {lastAlertSentTime && (
+                <div className="flex items-center justify-between text-[11px] text-rose-300 font-mono border-t border-slate-800/60 pt-1.5">
+                  <span>Last Alert Dispatched:</span>
+                  <span className="font-bold">{lastAlertSentTime}</span>
+                </div>
+              )}
+
+              <button
+                type="button"
+                onClick={handleToggleMlDetectionMails}
+                disabled={isTogglingMails}
+                className={`w-full mt-2 py-2 px-3 rounded-lg text-xs font-bold flex items-center justify-center gap-1.5 transition active:scale-95 border ${
+                  stopMlDetectionMails
+                    ? "border-emerald-500/50 bg-emerald-500/15 text-emerald-300 hover:bg-emerald-500/25"
+                    : "border-rose-500/40 bg-rose-500/10 text-rose-300 hover:bg-rose-500/20"
+                }`}
+              >
+                {stopMlDetectionMails ? (
+                  <>
+                    <Mail size={13} className="text-emerald-400" />
+                    <span>Resume ML Detection Emails</span>
+                  </>
+                ) : (
+                  <>
+                    <MailX size={13} className="text-rose-400" />
+                    <span>Stop ML Detection Emails</span>
+                  </>
+                )}
+              </button>
+            </div>
           </div>
 
           <div className="mt-6 border-t border-slate-800/80 pt-3 flex items-center justify-between text-[11px] text-slate-500">

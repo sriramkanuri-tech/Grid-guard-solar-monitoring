@@ -69,6 +69,7 @@ export interface SystemState {
   lastUpdate: string;
   version: string;
   maintenanceMode: boolean;
+  stopMlDetectionMails?: boolean;
 }
 
 // Default fallback storage keys for offline resilience
@@ -909,13 +910,22 @@ export const rtdbService = {
         sysRef,
         (snapshot) => {
           if (snapshot.exists()) {
-            callback(snapshot.val() as SystemState);
+            const raw = snapshot.val() as any;
+            const normalized: SystemState = {
+              status: raw.status || raw.state?.status || "OPTIMAL",
+              lastUpdate: raw.lastUpdate || raw.state?.lastUpdate || new Date().toISOString(),
+              version: raw.version || raw.state?.version || "2.4.0-prod",
+              maintenanceMode: Boolean(raw.maintenanceMode ?? raw.state?.maintenanceMode ?? false),
+              stopMlDetectionMails: Boolean(raw.stopMlDetectionMails ?? raw.state?.stopMlDetectionMails ?? false),
+            };
+            callback(normalized);
           } else {
             callback({
               status: "OPTIMAL",
               lastUpdate: new Date().toISOString(),
               version: "2.4.0-prod",
               maintenanceMode: false,
+              stopMlDetectionMails: false,
             });
           }
         },
@@ -933,9 +943,42 @@ export const rtdbService = {
         ...state,
         lastUpdate: new Date().toISOString(),
       });
+      await rtdbPatch("system", {
+        ...state,
+        lastUpdate: new Date().toISOString(),
+      });
     } catch (err) {
       console.warn("[RTDB] Failed updating system state:", err);
     }
+  },
+
+  setMlDetectionEmailsStopped: async (stopped: boolean): Promise<void> => {
+    try {
+      localStorage.setItem("gridguard_stop_ml_detection_mails", JSON.stringify(stopped));
+      await Promise.allSettled([
+        rtdbPatch("system", { stopMlDetectionMails: stopped, lastUpdate: new Date().toISOString() }),
+        rtdbPut("systemSettings/stop_ml_detection_mails", stopped),
+      ]);
+    } catch (err) {
+      console.warn("[RTDB] Failed setting stop_ml_detection_mails:", err);
+    }
+  },
+
+  getMlDetectionEmailsStopped: async (): Promise<boolean> => {
+    try {
+      const cached = localStorage.getItem("gridguard_stop_ml_detection_mails");
+      const rest = await rtdbFetch<boolean>("systemSettings/stop_ml_detection_mails");
+      if (typeof rest === "boolean") return rest;
+      const sys = await rtdbFetch<any>("system");
+      if (sys) {
+        if (typeof sys.stopMlDetectionMails === "boolean") return sys.stopMlDetectionMails;
+        if (sys.state && typeof sys.state.stopMlDetectionMails === "boolean") return sys.state.stopMlDetectionMails;
+      }
+      if (cached !== null) {
+        return JSON.parse(cached);
+      }
+    } catch {}
+    return false;
   },
 
   // ==========================================
