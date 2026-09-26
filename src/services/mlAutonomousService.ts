@@ -104,16 +104,24 @@ class MLAutonomousService {
     this.notifyListeners();
   }
 
-  public async runInferenceCycle(customPayload?: {
-    dc: number;
-    ac: number;
-    ambientTemp: number;
-    moduleTemp: number;
-    irradiation: number;
-    hour: number;
-  }): Promise<MLPredictionResponse | null> {
+  public async runInferenceCycle(
+    customPayload?: {
+      dc: number;
+      ac: number;
+      ambientTemp: number;
+      moduleTemp: number;
+      irradiation: number;
+      hour: number;
+    },
+    forceEmailAlert: boolean = false
+  ): Promise<MLPredictionResponse | null> {
     if (this.isEvaluating && !customPayload) return null;
     this.isEvaluating = true;
+
+    if (customPayload || forceEmailAlert) {
+      // Manual test or fault injection resets cooldown so email dispatches immediately
+      this.lastEmailAlertTimestamp = 0;
+    }
 
     const vector = telemetrySyncService.getTelemetryVector();
     const dc = customPayload ? customPayload.dc : vector.dcPower;
@@ -190,7 +198,15 @@ class MLAutonomousService {
     inputs: { dc: number; ac: number; ambientTemp: number; moduleTemp: number; irradiation: number; hour: number }
   ) {
     const user = getStoredUser();
-    const targetEmail = user?.email || "sriramkanuri4@gmail.com";
+    const adminEmail = "sriramkanuri4@gmail.com";
+    const rawEmails = [adminEmail, user?.email];
+    const recipients = Array.from(
+      new Set(
+        rawEmails
+          .filter((e): e is string => typeof e === "string" && e.includes("@") && e.trim().length > 4)
+          .map((e) => e.trim().toLowerCase())
+      )
+    );
     const nowIso = new Date().toISOString();
     const anomalyId = `anom_${Date.now()}`;
 
@@ -209,7 +225,7 @@ class MLAutonomousService {
         tempDisparity: Number((inputs.moduleTemp - inputs.ambientTemp).toFixed(1)),
       },
       emailAlertSent: true,
-      alertRecipient: targetEmail,
+      alertRecipient: recipients.join(", "),
       resolved: false,
       createdAt: nowIso,
     };
@@ -256,7 +272,7 @@ class MLAutonomousService {
           status: "ABNORMAL",
         },
         user?.uid || "system",
-        targetEmail
+        recipients.join(", ")
       );
     } catch (auditErr) {
       console.warn("[MLAutonomousService] Failed writing audit log:", auditErr);
@@ -267,9 +283,9 @@ class MLAutonomousService {
       await rtdbService.updateNodeStatus("GG-NODE-01", "CRITICAL");
     } catch {}
 
-    // 5. DISPATCH EMAIL ADVISORY TO TARGET USER (Protected by 60s cooldown)
+    // 5. DISPATCH EMAIL ADVISORY TO RECIPIENTS (Protected by 25s cooldown)
     const now = Date.now();
-    if (now - this.lastEmailAlertTimestamp >= 60000) {
+    if (now - this.lastEmailAlertTimestamp >= 25000) {
       this.lastEmailAlertTimestamp = now;
       this.lastEmailSentTime = new Date().toLocaleTimeString();
 
@@ -298,7 +314,7 @@ RECOMMENDED ACTION:
 2. Check module junction thermal sensors for localized hotspot degradation.
 3. Review live telemetry in the Grid Guard Control Console: https://gridguardsolarmonitoring.web.app
 
-Dispatched automatically by Grid Guard ML Autonomous Engine to: ${targetEmail}`;
+Dispatched automatically by Grid Guard ML Autonomous Engine to: ${recipients.join(", ")}`;
 
       const htmlMessage = `<div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 600px; margin: 0 auto; background: #030712; color: #f8fafc; border-radius: 12px; border: 1px solid #1e293b; overflow: hidden;">
         <div style="background: linear-gradient(135deg, #dc2626 0%, #991b1b 100%); padding: 24px; text-align: center;">
@@ -327,16 +343,19 @@ Dispatched automatically by Grid Guard ML Autonomous Engine to: ${targetEmail}`;
           </div>
         </div>
         <div style="background: #0f172a; padding: 16px; text-align: center; border-top: 1px solid #1e293b; font-size: 11px; color: #64748b;">
-          Stored in Firebase RTDB &bull; Dispatched to ${targetEmail} &bull; Grid Guard Solar Monitoring
+          Stored in Firebase RTDB &bull; Dispatched to ${recipients.join(", ")} &bull; Grid Guard Solar Monitoring
         </div>
       </div>`;
 
       apiClient
         .sendEmail({
-          recipients: [targetEmail],
+          recipients,
           subject,
           message: plainMessage,
           html_message: htmlMessage,
+        })
+        .then((res) => {
+          console.log("[MLAutonomousService] Anomaly email alert dispatched:", res);
         })
         .catch((emailErr) => {
           console.warn("[MLAutonomousService] Automated email alert failed:", emailErr);
@@ -386,8 +405,8 @@ Dispatched automatically by Grid Guard ML Autonomous Engine to: ${targetEmail}`;
 
   public triggerTestAnomaly() {
     this.lastEmailAlertTimestamp = 0; // reset cooldown for manual test
-    telemetrySyncService.triggerAnomalySimulation(6, "Manual Inverter String Disparity Simulation");
-    this.runInferenceCycle();
+    telemetrySyncService.triggerAnomalySimulation(8, "Manual Inverter String Disparity Simulation");
+    this.runInferenceCycle(undefined, true);
   }
 }
 

@@ -155,15 +155,23 @@ def send_smtp_email(to_addrs: List[str], subject: str, text_content: str, html_c
     smtp_pass = os.getenv("SMTP_PASS", "").strip()
     smtp_from = os.getenv("SMTP_FROM", smtp_user or "Grid Guard Solar <sriramkanuri45@gmail.com>")
 
-    if not smtp_user or not smtp_pass:
-        print("[SMTP Error] SMTP_USER or SMTP_PASS not set in environment.")
+    clean_addrs = [str(a).strip() for a in to_addrs if a and "@" in str(a)]
+    if not clean_addrs:
+        print("[SMTP Error] No valid email recipients specified.", flush=True)
         return False
 
+    clean_addrs = list(dict.fromkeys(clean_addrs))
+
+    if not smtp_user or not smtp_pass:
+        print("[SMTP Error] SMTP_USER or SMTP_PASS not set in environment.", flush=True)
+        return False
+
+    server = None
     try:
         msg = MIMEMultipart("alternative")
         msg["Subject"] = Header(subject, "utf-8")
         msg["From"] = Header(smtp_from, "utf-8")
-        msg["To"] = ", ".join(to_addrs)
+        msg["To"] = ", ".join(clean_addrs)
 
         part1 = MIMEText(text_content, "plain", "utf-8")
         msg.attach(part1)
@@ -172,18 +180,23 @@ def send_smtp_email(to_addrs: List[str], subject: str, text_content: str, html_c
             part2 = MIMEText(html_content, "html", "utf-8")
             msg.attach(part2)
 
-        server = smtplib.SMTP(smtp_host, smtp_port, timeout=15)
+        server = smtplib.SMTP(smtp_host, smtp_port, timeout=20)
         server.ehlo()
         server.starttls()
         server.ehlo()
         server.login(smtp_user, smtp_pass)
-        server.sendmail(smtp_user, to_addrs, msg.as_string())
-        server.quit()
-        print(f"[SMTP Success] Email sent to {to_addrs}")
+        server.sendmail(smtp_user, clean_addrs, msg.as_string())
+        print(f"[SMTP Success] Email sent to {clean_addrs}: {subject}", flush=True)
         return True
     except Exception as e:
-        print(f"[SMTP Exception] Error sending email: {e}")
+        print(f"[SMTP Exception] Error sending email: {e}", flush=True)
         return False
+    finally:
+        if server:
+            try:
+                server.quit()
+            except Exception:
+                pass
 
 
 START_TIME = time.time()
@@ -706,59 +719,6 @@ def rtdb_background_worker():
                     }
                     requests.patch(f"{RTDB_BASE_URL}/nodes/GG-NODE-01.json", json=node_update, timeout=3)
 
-                # Process email_queue from Firebase RTDB (every 2 ticks)
-                if tick_count % 2 == 0:
-                    try:
-                        q_res = requests.get(f"{RTDB_BASE_URL}/email_queue.json", timeout=3)
-                        if q_res.status_code == 200 and q_res.json():
-                            queue_data = q_res.json()
-                            for item_id, item in list(queue_data.items()):
-                                if not item or item.get("status") == "SENT":
-                                    continue
-                                recipients = item.get("recipients", [])
-                                subject = item.get("subject", "Grid Guard Notification")
-                                message = item.get("message", "")
-                                html_msg = item.get("html_message")
-                                if recipients and message:
-                                    safe_subj = str(subject).encode("ascii", errors="replace").decode("ascii")
-                                    print(f"[RTDB Email Worker] Dispatching queued email to {recipients}: {safe_subj}")
-                                    sent = send_smtp_email(recipients, subject, message, html_msg)
-                                    if sent:
-                                        requests.delete(f"{RTDB_BASE_URL}/email_queue/{item_id}.json", timeout=3)
-                                    else:
-                                        requests.patch(f"{RTDB_BASE_URL}/email_queue/{item_id}.json", json={"status": "FAILED_RETRY"}, timeout=3)
-                    except Exception as q_err:
-                        safe_err = str(q_err).encode("ascii", errors="replace").decode("ascii")
-                        print(f"[RTDB Email Worker Error] {safe_err}")
-
-                # Process otp_dispatch_queue from Firebase RTDB (every 2 ticks)
-                if tick_count % 2 == 1:
-                    try:
-                        otp_res = requests.get(f"{RTDB_BASE_URL}/otp_dispatch_queue.json", timeout=3)
-                        if otp_res.status_code == 200 and otp_res.json():
-                            otp_queue = otp_res.json()
-                            for queue_id, otp_item in list(otp_queue.items()):
-                                if not otp_item or otp_item.get("status") == "SENT":
-                                    continue
-                                target_email = otp_item.get("email")
-                                code = otp_item.get("otp")
-                                if target_email and code:
-                                    print(f"[RTDB OTP Worker] Sending queued OTP {code} to {target_email}")
-                                    subj = f"Grid Guard Verification Code: {code}"
-                                    body = f"Hello,\n\nYour 6-digit verification code for Grid Guard Solar Monitoring is: {code}\n\nThis code expires in 5 minutes.\n\nPortal Login: https://gridguardsolarmonitoring.web.app/login\n\nBest regards,\nGrid Guard Security Team"
-                                    html_body = f"""<div style="font-family:sans-serif;max-width:500px;margin:auto;background:#030712;color:#fff;padding:24px;border-radius:12px;border:1px solid #1e293b;">
-                                      <h2 style="color:#a3e635;margin-top:0;">Grid Guard Verification</h2>
-                                      <p style="color:#cbd5e1;">Your 6-digit one-time passcode:</p>
-                                      <div style="background:#0f172a;border:1px solid #334155;border-radius:8px;padding:16px;text-align:center;font-size:28px;font-weight:bold;letter-spacing:6px;color:#f59e0b;font-family:monospace;">
-                                        {code}
-                                      </div>
-                                      <p style="color:#64748b;font-size:12px;margin-top:16px;">Expires in 5 minutes. If you did not request this, please disregard.</p>
-                                    </div>"""
-                                    sent = send_smtp_email([target_email], subj, body, html_body)
-                                    if sent:
-                                        requests.delete(f"{RTDB_BASE_URL}/otp_dispatch_queue/{queue_id}.json", timeout=3)
-                    except Exception as otp_q_err:
-                        print(f"[RTDB OTP Worker Error] {otp_q_err}")
             elif res.status_code in (401, 403):
                 rtdb_sync_state["status"] = "PERMISSION_DENIED"
                 rtdb_sync_state["last_error"] = "Firebase RTDB Rules block unauthenticated read/write. Set { \".read\": true, \".write\": true } in Firebase Console Rules."
@@ -773,8 +733,113 @@ def rtdb_background_worker():
         time.sleep(1.0)
 
 
-# Start daemon background thread
+def rtdb_queue_dispatcher():
+    """
+    Dedicated background worker that polls Firebase RTDB /email_queue and /otp_dispatch_queue
+    every 1.5 seconds and dispatches SMTP emails immediately.
+    Completely decoupled from telemetry generation to guarantee fast, non-blocking delivery.
+    """
+    session = requests.Session()
+    session.headers.update({"Connection": "close"})
+    print("[RTDB Dispatcher] Dedicated Email & OTP queue worker started.", flush=True)
+
+    while True:
+        try:
+            # 1. Process email_queue
+            try:
+                res = session.get(f"{RTDB_BASE_URL}/email_queue.json", timeout=6)
+                if res.status_code == 200 and res.json():
+                    queue_data = res.json()
+                    if isinstance(queue_data, dict):
+                        for item_id, item in list(queue_data.items()):
+                            if not item or not isinstance(item, dict):
+                                session.delete(f"{RTDB_BASE_URL}/email_queue/{item_id}.json", timeout=10)
+                                continue
+
+                            recipients = item.get("recipients", [])
+                            if isinstance(recipients, str):
+                                recipients = [r.strip() for r in recipients.split(",") if r.strip()]
+                            elif isinstance(recipients, list):
+                                recipients = [str(r).strip() for r in recipients if r]
+
+                            subject = item.get("subject", "Grid Guard Notification")
+                            message = item.get("message", "")
+                            html_msg = item.get("html_message")
+
+                            retries = int(item.get("retries", 0))
+                            if recipients and (message or html_msg):
+                                safe_subj = str(subject).encode("ascii", errors="replace").decode("ascii")
+                                print(f"[RTDB Queue Dispatcher] Processing email {item_id} to {recipients}: {safe_subj}", flush=True)
+                                sent = send_smtp_email(recipients, subject, message, html_msg)
+                                if sent:
+                                    print(f"[RTDB Queue Dispatcher] Successfully sent {item_id}. Removing from queue.", flush=True)
+                                    session.delete(f"{RTDB_BASE_URL}/email_queue/{item_id}.json", timeout=10)
+                                else:
+                                    if retries >= 3:
+                                        print(f"[RTDB Queue Dispatcher] Exceeded max retries for {item_id}. Discarding.", flush=True)
+                                        session.delete(f"{RTDB_BASE_URL}/email_queue/{item_id}.json", timeout=10)
+                                    else:
+                                        print(f"[RTDB Queue Dispatcher] Failed sending {item_id} (retry {retries + 1}/3).", flush=True)
+                                        session.patch(f"{RTDB_BASE_URL}/email_queue/{item_id}.json", json={"status": "FAILED_RETRY", "retries": retries + 1}, timeout=10)
+                            else:
+                                session.delete(f"{RTDB_BASE_URL}/email_queue/{item_id}.json", timeout=10)
+            except Exception as e:
+                print(f"[RTDB Queue Dispatcher - Email Error]: {e}", flush=True)
+
+            # 2. Process otp_dispatch_queue
+            try:
+                res = session.get(f"{RTDB_BASE_URL}/otp_dispatch_queue.json", timeout=10)
+                if res.status_code == 200 and res.json():
+                    otp_queue = res.json()
+                    if isinstance(otp_queue, dict):
+                        for queue_id, otp_item in list(otp_queue.items()):
+                            if not otp_item or not isinstance(otp_item, dict):
+                                session.delete(f"{RTDB_BASE_URL}/otp_dispatch_queue/{queue_id}.json", timeout=10)
+                                continue
+
+                            target_email = otp_item.get("email")
+                            code = otp_item.get("otp")
+                            retries = int(otp_item.get("retries", 0))
+                            if target_email and code:
+                                print(f"[RTDB Queue Dispatcher] Processing OTP {code} to {target_email}", flush=True)
+                                subj = f"Grid Guard Verification Code: {code}"
+                                body = f"Hello,\n\nYour 6-digit verification code for Grid Guard Solar Monitoring is: {code}\n\nThis code expires in 5 minutes.\n\nPortal Login: https://gridguardsolarmonitoring.web.app/login\n\nBest regards,\nGrid Guard Security Team"
+                                html_body = f"""<div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;max-width:500px;margin:auto;background:#030712;color:#f8fafc;padding:24px;border-radius:12px;border:1px solid #1e293b;">
+                                  <div style="text-align:center;margin-bottom:20px;">
+                                    <h2 style="color:#a3e635;margin:0 0 8px 0;font-size:22px;">Grid Guard Security Verification</h2>
+                                    <p style="color:#94a3b8;font-size:13px;margin:0;">Solar Array Monitoring & Control Console</p>
+                                  </div>
+                                  <p style="color:#cbd5e1;font-size:14px;">Your 6-digit one-time verification passcode is:</p>
+                                  <div style="background:#0f172a;border:1px solid #334155;border-radius:8px;padding:20px;text-align:center;font-size:32px;font-weight:800;letter-spacing:8px;color:#f59e0b;font-family:monospace;margin:16px 0;">
+                                    {code}
+                                  </div>
+                                  <p style="color:#64748b;font-size:12px;text-align:center;margin:16px 0 0 0;">
+                                    Expires in 5 minutes. If you did not request this, please disregard this email.
+                                  </p>
+                                </div>"""
+                                sent = send_smtp_email([target_email], subj, body, html_body)
+                                if sent:
+                                    session.delete(f"{RTDB_BASE_URL}/otp_dispatch_queue/{queue_id}.json", timeout=10)
+                                else:
+                                    if retries >= 3:
+                                        print(f"[RTDB Queue Dispatcher] Exceeded max retries for OTP {queue_id}. Discarding.", flush=True)
+                                        session.delete(f"{RTDB_BASE_URL}/otp_dispatch_queue/{queue_id}.json", timeout=10)
+                                    else:
+                                        session.patch(f"{RTDB_BASE_URL}/otp_dispatch_queue/{queue_id}.json", json={"status": "FAILED_RETRY", "retries": retries + 1}, timeout=10)
+                            else:
+                                session.delete(f"{RTDB_BASE_URL}/otp_dispatch_queue/{queue_id}.json", timeout=10)
+            except Exception as e:
+                print(f"[RTDB Queue Dispatcher - OTP Error]: {e}", flush=True)
+
+        except Exception as loop_e:
+            print(f"[RTDB Queue Dispatcher Loop Error]: {loop_e}", flush=True)
+
+        time.sleep(1.5)
+
+
+# Start daemon background threads
 threading.Thread(target=rtdb_background_worker, daemon=True, name="rtdb_telemetry_streamer").start()
+threading.Thread(target=rtdb_queue_dispatcher, daemon=True, name="rtdb_queue_dispatcher").start()
 
 
 @app.get("/api/rtdb/status")

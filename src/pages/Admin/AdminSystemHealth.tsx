@@ -34,6 +34,8 @@ export default function AdminSystemHealth() {
   const [refreshing, setRefreshing] = useState(false);
   const [testAlertSending, setTestAlertSending] = useState(false);
   const [testAlertResult, setTestAlertResult] = useState<string | null>(null);
+  const [maintenanceToggling, setMaintenanceToggling] = useState(false);
+  const [maintenanceBroadcastToast, setMaintenanceBroadcastToast] = useState<string | null>(null);
 
   // Subsystem health state
   const [services, setServices] = useState<Record<string, ServiceHealth>>({
@@ -195,12 +197,193 @@ export default function AdminSystemHealth() {
   }, [runAllChecks]);
 
   const toggleMaintenanceMode = async () => {
-    if (!systemState) return;
+    if (!systemState || maintenanceToggling) return;
+    setMaintenanceToggling(true);
     const newMode = !systemState.maintenanceMode;
-    await rtdbService.updateSystemState({
-      maintenanceMode: newMode,
-      status: newMode ? "DEGRADED" : "OPTIMAL",
-    });
+
+    try {
+      // 1. Update RTDB system state immediately
+      await rtdbService.updateSystemState({
+        maintenanceMode: newMode,
+        status: newMode ? "DEGRADED" : "OPTIMAL",
+      });
+
+      // 2. Fetch all registered operator emails
+      const recipients = await rtdbService.getAllUserEmails();
+      const timestamp = new Date().toLocaleString();
+
+      // 3. Prepare neat professional email templates
+      const subject = newMode
+        ? "⚠️ Grid Guard Advisory: Scheduled System Maintenance in Progress"
+        : "✅ Grid Guard Update: Maintenance Concluded — Platform Fully Operational";
+
+      const plainText = newMode
+        ? `GRID GUARD SOLAR MONITORING — SYSTEM ADVISORY
+==================================================
+Status: SYSTEM MAINTENANCE IN PROGRESS
+Target Systems: Inverter Telemetry, ML Pipeline, Node Controllers
+Timestamp: ${timestamp}
+
+Dear Grid Guard Operator,
+
+Please be advised that the Grid Guard Solar Monitoring platform is currently in MAINTENANCE MODE for scheduled infrastructure calibration and system updates.
+
+OPERATIONAL IMPACT:
+• Live Telemetry: Temporarily paused / recalibrating
+• Inverter Hardware Protection: Fully armed & fail-safe active
+• Historical Logs & Telemetry Archive: Intact & protected
+• Estimated Window: 15 - 30 minutes
+
+Console Access: https://gridguardsolarmonitoring.web.app
+
+Grid Guard Infrastructure Operations Team
+Dispatched automatically to all registered operators.`
+        : `GRID GUARD SOLAR MONITORING — SYSTEM RESTORATION
+==================================================
+Status: ALL SYSTEMS FULLY OPERATIONAL
+Target Systems: Inverter Telemetry, ML Engine, Node Controllers
+Timestamp: ${timestamp}
+
+Dear Grid Guard Operator,
+
+The scheduled platform maintenance on the Grid Guard Solar Monitoring platform has successfully concluded.
+
+All services, live inverter telemetry streaming, Isolation Forest ML anomaly detection, and automated dispatch engines are operating nominally.
+
+Console Access: https://gridguardsolarmonitoring.web.app
+
+Grid Guard Infrastructure Operations Team
+Dispatched automatically to all registered operators.`;
+
+      const htmlText = newMode
+        ? `<div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; max-width: 600px; margin: 0 auto; background: #030712; color: #f8fafc; border-radius: 16px; border: 1px solid #1e293b; overflow: hidden; box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.5);">
+  <div style="background: linear-gradient(135deg, #b45309 0%, #78350f 100%); padding: 28px 24px; text-align: center; border-bottom: 1px solid #d97706;">
+    <div style="display: inline-block; background: rgba(0, 0, 0, 0.4); border: 1px solid #f59e0b; padding: 4px 12px; border-radius: 9999px; font-size: 11px; font-weight: 800; letter-spacing: 0.15em; text-transform: uppercase; color: #fef3c7; margin-bottom: 12px;">
+      SYSTEM ADVISORY NOTICE
+    </div>
+    <h1 style="margin: 0; color: #ffffff; font-size: 22px; font-weight: 800; letter-spacing: -0.02em;">Grid Guard Maintenance Active</h1>
+    <p style="margin: 6px 0 0 0; color: #fed7aa; font-size: 13px;">Solar Monitoring Platform &bull; Infrastructure Operations</p>
+  </div>
+  <div style="padding: 28px 24px;">
+    <div style="background: #0f172a; border: 1px solid #334155; border-radius: 12px; padding: 18px; margin-bottom: 24px;">
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+        <span style="color: #94a3b8; font-size: 12px; text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600;">System State</span>
+        <span style="background: #f59e0b; color: #020617; font-weight: 800; font-size: 11px; padding: 3px 10px; border-radius: 6px; letter-spacing: 0.05em;">MAINTENANCE MODE</span>
+      </div>
+      <p style="margin: 0; color: #e2e8f0; font-size: 14px; line-height: 1.6;">
+        Grid Guard administrator has initiated scheduled maintenance for system-wide health audits, model parameter tuning, and database synchronization.
+      </p>
+    </div>
+    <h3 style="margin: 0 0 12px 0; color: #38bdf8; font-size: 13px; text-transform: uppercase; letter-spacing: 0.05em;">Operational Impact</h3>
+    <table style="width: 100%; border-collapse: collapse; margin-bottom: 24px; font-size: 13px;">
+      <tr style="border-bottom: 1px solid #1e293b;">
+        <td style="padding: 10px 0; color: #94a3b8; width: 40%;">Live Telemetry:</td>
+        <td style="padding: 10px 0; color: #f59e0b; font-weight: 600; text-align: right;">Temporarily paused / recalibrating</td>
+      </tr>
+      <tr style="border-bottom: 1px solid #1e293b;">
+        <td style="padding: 10px 0; color: #94a3b8;">Hardware Protection:</td>
+        <td style="padding: 10px 0; color: #10b981; font-weight: 600; text-align: right;">ARMED & FAIL-SAFE ACTIVE</td>
+      </tr>
+      <tr style="border-bottom: 1px solid #1e293b;">
+        <td style="padding: 10px 0; color: #94a3b8;">Historical Logs:</td>
+        <td style="padding: 10px 0; color: #10b981; font-weight: 600; text-align: right;">Intact & Protected</td>
+      </tr>
+      <tr>
+        <td style="padding: 10px 0; color: #94a3b8;">Estimated Duration:</td>
+        <td style="padding: 10px 0; color: #f8fafc; font-weight: 600; text-align: right;">15 &ndash; 30 Minutes</td>
+      </tr>
+    </table>
+    <div style="text-align: center; margin: 28px 0 16px 0;">
+      <a href="https://gridguardsolarmonitoring.web.app" style="display: inline-block; background: #f59e0b; color: #020617; text-decoration: none; padding: 12px 28px; border-radius: 8px; font-weight: 800; font-size: 14px; letter-spacing: 0.02em;">
+        View Live Status in Console
+      </a>
+    </div>
+  </div>
+  <div style="background: #0f172a; padding: 16px 24px; text-align: center; border-top: 1px solid #1e293b; font-size: 11px; color: #64748b; line-height: 1.6;">
+    Dispatched to all registered Grid Guard operators &bull; Grid Guard Solar Monitoring System<br />
+    Timestamp: ${timestamp}
+  </div>
+</div>`
+        : `<div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; max-width: 600px; margin: 0 auto; background: #030712; color: #f8fafc; border-radius: 16px; border: 1px solid #1e293b; overflow: hidden; box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.5);">
+  <div style="background: linear-gradient(135deg, #059669 0%, #064e3b 100%); padding: 28px 24px; text-align: center; border-bottom: 1px solid #10b981;">
+    <div style="display: inline-block; background: rgba(0, 0, 0, 0.4); border: 1px solid #10b981; padding: 4px 12px; border-radius: 9999px; font-size: 11px; font-weight: 800; letter-spacing: 0.15em; text-transform: uppercase; color: #a7f3d0; margin-bottom: 12px;">
+      SYSTEM RESTORATION NOTICE
+    </div>
+    <h1 style="margin: 0; color: #ffffff; font-size: 22px; font-weight: 800; letter-spacing: -0.02em;">All Systems Fully Operational</h1>
+    <p style="margin: 6px 0 0 0; color: #a7f3d0; font-size: 13px;">Solar Monitoring Platform &bull; Maintenance Window Concluded</p>
+  </div>
+  <div style="padding: 28px 24px;">
+    <div style="background: #0f172a; border: 1px solid #334155; border-radius: 12px; padding: 18px; margin-bottom: 24px;">
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+        <span style="color: #94a3b8; font-size: 12px; text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600;">System State</span>
+        <span style="background: #10b981; color: #020617; font-weight: 800; font-size: 11px; padding: 3px 10px; border-radius: 6px; letter-spacing: 0.05em;">OPERATIONAL</span>
+      </div>
+      <p style="margin: 0; color: #e2e8f0; font-size: 14px; line-height: 1.6;">
+        Scheduled platform maintenance has concluded. Real-time inverter telemetry streams, machine learning isolation forest pipelines, and automated security monitors are performing nominally.
+      </p>
+    </div>
+    <h3 style="margin: 0 0 12px 0; color: #38bdf8; font-size: 13px; text-transform: uppercase; letter-spacing: 0.05em;">Subsystem Status</h3>
+    <table style="width: 100%; border-collapse: collapse; margin-bottom: 24px; font-size: 13px;">
+      <tr style="border-bottom: 1px solid #1e293b;">
+        <td style="padding: 10px 0; color: #94a3b8; width: 40%;">Telemetry Ingestion:</td>
+        <td style="padding: 10px 0; color: #10b981; font-weight: 600; text-align: right;">100% OPERATIONAL</td>
+      </tr>
+      <tr style="border-bottom: 1px solid #1e293b;">
+        <td style="padding: 10px 0; color: #94a3b8;">Isolation Forest ML:</td>
+        <td style="padding: 10px 0; color: #10b981; font-weight: 600; text-align: right;">ACTIVE (Real-time Evaluation)</td>
+      </tr>
+      <tr style="border-bottom: 1px solid #1e293b;">
+        <td style="padding: 10px 0; color: #94a3b8;">Alert Gateway:</td>
+        <td style="padding: 10px 0; color: #10b981; font-weight: 600; text-align: right;">ARMED</td>
+      </tr>
+    </table>
+    <div style="text-align: center; margin: 28px 0 16px 0;">
+      <a href="https://gridguardsolarmonitoring.web.app" style="display: inline-block; background: #10b981; color: #020617; text-decoration: none; padding: 12px 28px; border-radius: 8px; font-weight: 800; font-size: 14px; letter-spacing: 0.02em;">
+        Open Monitoring Console
+      </a>
+    </div>
+  </div>
+  <div style="background: #0f172a; padding: 16px 24px; text-align: center; border-top: 1px solid #1e293b; font-size: 11px; color: #64748b; line-height: 1.6;">
+    Dispatched to all registered Grid Guard operators &bull; Grid Guard Solar Monitoring System<br />
+    Timestamp: ${timestamp}
+  </div>
+</div>`;
+
+      // 4. Send email broadcast
+      if (recipients.length > 0) {
+        await apiClient.sendEmail({
+          recipients,
+          subject,
+          message: plainText,
+          html_message: htmlText,
+          sender_name: "Grid Guard Infrastructure Operations",
+        });
+      }
+
+      // 5. Log audit event
+      await rtdbService.logAuditEvent(
+        newMode ? "MAINTENANCE_MODE_ENABLED" : "MAINTENANCE_MODE_DISABLED",
+        "SYSTEM",
+        {
+          maintenanceMode: newMode,
+          recipientsCount: recipients.length,
+          recipients,
+        },
+        "admin",
+        "sriramkanuri4@gmail.com"
+      );
+
+      setMaintenanceBroadcastToast(
+        `Maintenance mode ${newMode ? "ENABLED" : "DISABLED"}. Notification dispatched to ${recipients.length} operator${recipients.length === 1 ? "" : "s"}.`
+      );
+      setTimeout(() => setMaintenanceBroadcastToast(null), 6000);
+    } catch (err: unknown) {
+      console.error("[AdminSystemHealth] Failed toggling maintenance mode:", err);
+      setMaintenanceBroadcastToast("Failed updating maintenance mode. Please check connection.");
+      setTimeout(() => setMaintenanceBroadcastToast(null), 5000);
+    } finally {
+      setMaintenanceToggling(false);
+    }
   };
 
   const testMlInference = async () => {
@@ -288,6 +471,14 @@ export default function AdminSystemHealth() {
         </div>
       </div>
 
+      {/* Maintenance Notification Banner */}
+      {maintenanceBroadcastToast && (
+        <div className="flex items-center gap-3 rounded-xl border border-amber-500/40 bg-amber-500/10 p-4 text-xs font-medium text-amber-300 shadow-lg backdrop-blur-md animate-in fade-in slide-in-from-top-2">
+          <Mail className="h-4 w-4 text-amber-400 shrink-0 animate-bounce" />
+          <span>{maintenanceBroadcastToast}</span>
+        </div>
+      )}
+
       {/* Top Overview Cards */}
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
         {/* Core System Status */}
@@ -344,13 +535,15 @@ export default function AdminSystemHealth() {
             </span>
             <button
               onClick={toggleMaintenanceMode}
-              className={`rounded-lg px-2.5 py-1 text-[11px] font-mono font-bold transition ${
+              disabled={maintenanceToggling}
+              className={`flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-[11px] font-mono font-bold transition disabled:opacity-60 ${
                 systemState?.maintenanceMode
-                  ? "bg-amber-400/20 text-amber-300 border border-amber-400/30"
+                  ? "bg-amber-400/20 text-amber-300 border border-amber-400/30 hover:bg-amber-400/30"
                   : "bg-slate-800 text-slate-400 hover:text-white"
               }`}
             >
-              Toggle
+              {maintenanceToggling && <RefreshCw size={11} className="animate-spin text-amber-400" />}
+              <span>{maintenanceToggling ? "Broadcasting..." : "Toggle"}</span>
             </button>
           </div>
         </div>

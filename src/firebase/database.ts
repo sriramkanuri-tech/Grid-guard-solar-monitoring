@@ -408,6 +408,36 @@ export const rtdbService = {
     } catch {}
   },
 
+  getAllUserEmails: async (): Promise<string[]> => {
+    const emails = new Set<string>();
+    emails.add("sriramkanuri4@gmail.com");
+
+    try {
+      const raw = await rtdbFetch<Record<string, UserProfile>>("users");
+      if (raw && typeof raw === "object") {
+        Object.values(raw).forEach((u) => {
+          if (u && u.email && typeof u.email === "string" && u.email.includes("@")) {
+            emails.add(u.email.trim().toLowerCase());
+          }
+        });
+      }
+    } catch {}
+
+    try {
+      const cached = localStorage.getItem(CACHE_USERS_KEY);
+      if (cached) {
+        const list: UserProfile[] = JSON.parse(cached);
+        list.forEach((u) => {
+          if (u && u.email && typeof u.email === "string" && u.email.includes("@")) {
+            emails.add(u.email.trim().toLowerCase());
+          }
+        });
+      }
+    } catch {}
+
+    return Array.from(emails);
+  },
+
   // ==========================================
   // REAL-TIME TELEMETRY (BY NODE)
   // ==========================================
