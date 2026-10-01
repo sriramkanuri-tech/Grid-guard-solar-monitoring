@@ -41,14 +41,17 @@ export default function ForgotPasswordPage() {
   );
   const [isLoading, setIsLoading] = useState(false);
   const [cooldown, setCooldown] = useState(initialSent ? 300 : 0);
+  const [resendCooldown, setResendCooldown] = useState(initialSent ? 30 : 0);
+  const [isResending, setIsResending] = useState(false);
 
   useEffect(() => {
-    if (cooldown <= 0) return;
+    if (cooldown <= 0 && resendCooldown <= 0) return;
     const timer = setInterval(() => {
       setCooldown((prev) => (prev > 0 ? prev - 1 : 0));
+      setResendCooldown((prev) => (prev > 0 ? prev - 1 : 0));
     }, 1000);
     return () => clearInterval(timer);
-  }, [cooldown]);
+  }, [cooldown, resendCooldown]);
 
   const handleSendResetOtp = async (e: FormEvent) => {
     e.preventDefault();
@@ -66,6 +69,7 @@ export default function ForgotPasswordPage() {
       const res = await apiClient.sendOtp(targetEmail);
       setStep(2);
       setCooldown(300); // 5 minutes
+      setResendCooldown(30); // 30 seconds
       setOtpCode(""); // Keep empty: user must enter OTP from inbox
       setSuccessMsg(res.message || `A 6-digit password reset OTP has been sent to ${targetEmail}. Please check your inbox.`);
     } catch (err: unknown) {
@@ -73,6 +77,31 @@ export default function ForgotPasswordPage() {
       setError(msg);
     } finally {
       setIsLoading(false);
+    }
+  };
+
+  const handleResendOtp = async () => {
+    if (resendCooldown > 0 || isResending) return;
+    const targetEmail = email.trim().toLowerCase();
+    if (!targetEmail || !targetEmail.includes("@")) {
+      setError("Please enter a valid email address.");
+      return;
+    }
+
+    setIsResending(true);
+    setError("");
+    setSuccessMsg("");
+    try {
+      const res = await apiClient.sendOtp(targetEmail);
+      setCooldown(300);
+      setResendCooldown(30);
+      setOtpCode("");
+      setSuccessMsg(res.message || `A new 6-digit verification code has been dispatched to ${targetEmail}. Please check your inbox.`);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "Failed to resend reset code. Please try again.";
+      setError(msg);
+    } finally {
+      setIsResending(false);
     }
   };
 
@@ -214,13 +243,9 @@ export default function ForgotPasswordPage() {
                     Expires: {Math.floor(cooldown / 60)}:{String(cooldown % 60).padStart(2, "0")}
                   </span>
                 ) : (
-                  <button
-                    type="button"
-                    onClick={() => setStep(1)}
-                    className="text-[11px] font-mono text-lime-400 hover:underline"
-                  >
-                    Resend Code
-                  </button>
+                  <span className="text-[11px] font-mono text-rose-400">
+                    Code expired
+                  </span>
                 )}
               </div>
               <input
@@ -233,6 +258,34 @@ export default function ForgotPasswordPage() {
                 placeholder="000000"
                 className="w-full text-center tracking-[0.5em] font-mono font-black text-2xl py-3 rounded-xl border border-lime-400/50 bg-slate-950 text-lime-300 placeholder-slate-700 focus:outline-none focus:ring-2 focus:ring-lime-400/30"
               />
+
+              <div className="mt-2.5 flex items-center justify-between text-xs px-1">
+                <span className="text-[11px] text-slate-400 truncate max-w-[200px]">
+                  Dispatched to <strong className="text-slate-200">{email}</strong>
+                </span>
+                <button
+                  type="button"
+                  onClick={handleResendOtp}
+                  disabled={resendCooldown > 0 || isResending}
+                  className="inline-flex items-center gap-1.5 text-[11px] font-bold text-lime-400 hover:text-lime-300 disabled:opacity-40 disabled:cursor-not-allowed transition"
+                >
+                  {isResending ? (
+                    <>
+                      <RefreshCw size={11} className="animate-spin" />
+                      <span>Resending...</span>
+                    </>
+                  ) : resendCooldown > 0 ? (
+                    <span className="font-mono text-slate-400">
+                      Resend OTP ({resendCooldown}s)
+                    </span>
+                  ) : (
+                    <>
+                      <RefreshCw size={11} />
+                      <span className="underline underline-offset-2">Resend OTP</span>
+                    </>
+                  )}
+                </button>
+              </div>
             </div>
 
             <div>

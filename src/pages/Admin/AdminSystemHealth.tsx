@@ -16,8 +16,6 @@ import {
   Zap,
 } from "lucide-react";
 import { rtdbService, type SystemState } from "../../firebase/database";
-import { rtdb } from "../../firebase/config";
-import { ref, onValue } from "firebase/database";
 import { apiClient, API_URL } from "../../services/apiClient";
 
 interface ServiceHealth {
@@ -55,12 +53,12 @@ export default function AdminSystemHealth() {
       details: `Connecting to ${API_URL}...`,
       lastChecked: new Date().toLocaleTimeString(),
     },
-    rtdb: {
-      name: "Firebase Realtime Database",
+    database: {
+      name: "PostgreSQL 18 Database Engine",
       category: "STORAGE",
       status: "CHECKING",
       latencyMs: null,
-      details: "Connecting to .info/connected...",
+      details: "Connecting to gridguardsolarmonitoring via FastAPI bridge...",
       lastChecked: new Date().toLocaleTimeString(),
     },
     mlModel: {
@@ -81,7 +79,7 @@ export default function AdminSystemHealth() {
     },
   });
 
-  // RTDB System State listener
+  // System State listener
   useEffect(() => {
     const unsub = rtdbService.subscribeToSystem((state) => {
       setSystemState(state);
@@ -89,48 +87,15 @@ export default function AdminSystemHealth() {
     return () => unsub();
   }, []);
 
-  // RTDB Connection status
-  useEffect(() => {
-    try {
-      const connRef = ref(rtdb, ".info/connected");
-      const unsub = onValue(connRef, (snap) => {
-        const isConnected = snap.val() === true;
-        setServices((prev) => ({
-          ...prev,
-          rtdb: {
-            ...prev.rtdb,
-            status: isConnected ? "ONLINE" : "OFFLINE",
-            latencyMs: isConnected ? 12 : null,
-            details: isConnected
-              ? "Connected to gridguardsolarmonitoring-default-rtdb"
-              : "Disconnected from Firebase RTDB socket",
-            lastChecked: new Date().toLocaleTimeString(),
-          },
-        }));
-      });
-      return () => unsub();
-    } catch {
-      setServices((prev) => ({
-        ...prev,
-        rtdb: {
-          ...prev.rtdb,
-          status: "OFFLINE",
-          latencyMs: null,
-          details: "Could not bind connection listener",
-          lastChecked: new Date().toLocaleTimeString(),
-        },
-      }));
-    }
-  }, []);
-
   const runAllChecks = useCallback(async () => {
     setRefreshing(true);
 
-    // 1. Check FastAPI Backend & ML
+    // 1. Check FastAPI Backend, PostgreSQL 18 & ML
     const t0 = performance.now();
     try {
       const data = await apiClient.checkHealth();
       const latency = Math.round(performance.now() - t0);
+      const isPgOnline = data.database === "postgresql" && data.database_connected === true;
       setServices((prev) => ({
         ...prev,
         fastapi: {
@@ -138,6 +103,15 @@ export default function AdminSystemHealth() {
           status: "ONLINE",
           latencyMs: latency,
           details: `Uptime: ${Math.round(data.uptime_seconds || 0)}s | Version: ${data.version || "2.0.0"}`,
+          lastChecked: new Date().toLocaleTimeString(),
+        },
+        database: {
+          ...prev.database,
+          status: isPgOnline ? "ONLINE" : "OFFLINE",
+          latencyMs: latency,
+          details: isPgOnline
+            ? "Connected to PostgreSQL 18 (gridguardsolarmonitoring)"
+            : "PostgreSQL 18 connection inactive",
           lastChecked: new Date().toLocaleTimeString(),
         },
         mlModel: {
@@ -168,6 +142,13 @@ export default function AdminSystemHealth() {
           status: "OFFLINE",
           latencyMs: null,
           details: `FastAPI offline or unreachable (${msg})`,
+          lastChecked: new Date().toLocaleTimeString(),
+        },
+        database: {
+          ...prev.database,
+          status: "OFFLINE",
+          latencyMs: null,
+          details: "PostgreSQL bridge unreachable",
           lastChecked: new Date().toLocaleTimeString(),
         },
         mlModel: {
@@ -495,17 +476,17 @@ Dispatched automatically to all registered operators.`;
           </p>
         </div>
 
-        {/* RTDB Socket Status */}
+        {/* PostgreSQL 18 Status */}
         <div className="rounded-2xl border border-slate-800 bg-[#070F1E]/80 backdrop-blur-xl p-5 shadow-lg">
           <div className="flex items-center justify-between">
-            <span className="text-[10px] font-mono uppercase text-slate-500">Realtime Database</span>
+            <span className="text-[10px] font-mono uppercase text-slate-500">PostgreSQL 18</span>
             <Database className="h-4 w-4 text-sky-400" />
           </div>
           <p className="mt-2 text-xl font-extrabold text-sky-400">
-            {services.rtdb.status}
+            {services.database.status}
           </p>
           <p className="text-xs text-slate-400 mt-1 font-mono">
-            RTDB Latency: {services.rtdb.latencyMs ?? "--"} ms
+            DB Latency: {services.database.latencyMs ?? "--"} ms
           </p>
         </div>
 

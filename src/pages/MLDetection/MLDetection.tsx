@@ -33,6 +33,7 @@ import { ML_API_URL } from "../../config";
 import { apiClient } from "../../services/apiClient";
 import { gridDataService } from "../../services/gridDataService";
 import { getStoredUser } from "../../firebase/auth";
+import { rtdbService } from "../../firebase/database";
 import type { MLPredictionResponse, InferenceHistoryItem, MLHealthResponse } from "../../types/ml";
 
 export default function MLDetection() {
@@ -149,6 +150,14 @@ export default function MLDetection() {
     return () => unsub();
   }, [isAutonomous]);
 
+  useEffect(() => {
+    rtdbService.getMlDetectionEmailsStopped().then((stopped: boolean) => {
+      if (typeof stopped === "boolean") {
+        setStopMlDetectionMails(stopped);
+      }
+    });
+  }, []);
+
   const handleToggleAutonomous = () => {
     const next = !isAutonomous;
     setIsAutonomous(next);
@@ -160,8 +169,10 @@ export default function MLDetection() {
     setIsTogglingMails(true);
     const nextState = !stopMlDetectionMails;
     setStopMlDetectionMails(nextState);
+    localStorage.setItem("gridguard_stop_ml_detection_mails", JSON.stringify(nextState));
     try {
       await mlAutonomousService.setStopMlDetectionMails(nextState);
+      await rtdbService.setMlDetectionEmailsStopped(nextState);
       setAlertDispatchToast(
         nextState
           ? "ML Detection alert emails STOPPED. Telemetry evaluations and database logging remain active, but email dispatches are muted."

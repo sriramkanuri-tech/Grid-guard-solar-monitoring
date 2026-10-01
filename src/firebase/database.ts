@@ -1,16 +1,12 @@
-import {
-  ref,
-  onValue,
-  set,
-  update,
-  push,
-  remove,
-  get,
-  serverTimestamp,
-} from "firebase/database";
-import { rtdb, databaseURL } from "./config";
+/**
+ * Grid Guard Solar Monitoring - Database Integration Service
+ * PRIMARY PERSISTENT DATABASE: PostgreSQL 18 via FastAPI Backend Bridge.
+ * 
+ * Replaces Firebase Realtime Database with high-performance REST polling
+ * against FastAPI connected to PostgreSQL 18 ('gridguardsolarmonitoring').
+ */
+import { getEffectiveApiUrl } from "../services/apiClient";
 import type { UserProfile } from "../types/user";
-import type { GridData } from "../types/grid";
 import type { Alert } from "../types/alert";
 import type { SensorData } from "../types/sensor";
 import type { AnomalyRecord, InferenceHistoryItem } from "../types/ml";
@@ -28,6 +24,10 @@ export interface RealtimeTelemetry {
   frequency?: number;
   powerFactor?: number;
   status: "ONLINE" | "WARNING" | "CRITICAL" | "OFFLINE";
+  dc_power?: number;
+  ac_power?: number;
+  ambient_temperature?: number;
+  module_temperature?: number;
 }
 
 export interface SolarNode {
@@ -65,14 +65,14 @@ export interface AuditLogEntry {
 }
 
 export interface SystemState {
-  status: "OPTIMAL" | "DEGRADED" | "OFFLINE";
+  status: "OPTIMAL" | "DEGRADED" | "OFFLINE" | "MAINTENANCE";
   lastUpdate: string;
   version: string;
   maintenanceMode: boolean;
   stopMlDetectionMails?: boolean;
 }
 
-// Default fallback storage keys for offline resilience
+// Local caching keys for sub-millisecond initial render
 const CACHE_USERS_KEY = "gridguard_cache_users";
 const CACHE_NODES_KEY = "gridguard_cache_nodes";
 const CACHE_ALERTS_KEY = "gridguard_cache_alerts";
@@ -80,65 +80,24 @@ const CACHE_LOGS_KEY = "gridguard_cache_audit";
 const CACHE_NOTIFS_KEY = "gridguard_cache_notifs";
 const CACHE_ANOMALIES_KEY = "gridguard_cache_anomalies";
 const CACHE_ML_HISTORY_KEY = "gridguard_cache_ml_history";
+const CACHE_SENSORS_KEY = "gridguard_cache_sensors";
+
+const getApiBase = (): string => getEffectiveApiUrl();
 
 /**
- * Ultra-resilient RTDB write helpers:
- * 1. REST operation writes directly to Firebase Realtime Database over HTTPS.
- * 2. Concurrently, the Firebase SDK set/update/remove is called with an 800ms timeout
- *    so it never hangs indefinitely when the WebSocket connection is pending/unauthenticated.
+ * Universal backend REST fetcher with error resilience
  */
-export async function rtdbPut<T>(path: string, data: T): Promise<void> {
-  const restPromise = fetch(`${databaseURL}/${path}.json`, {
-    method: "PUT",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(data),
-  }).catch((err) => {
-    if (import.meta.env.DEV) console.warn(`[RTDB REST PUT ${path}]`, err);
-  });
-
-  const sdkPromise = Promise.race([
-    set(ref(rtdb, path), data),
-    new Promise((resolve) => setTimeout(resolve, 800)),
-  ]).catch(() => {});
-
-  await Promise.allSettled([restPromise, sdkPromise]);
-}
-
-export async function rtdbPatch<T>(path: string, patchData: T): Promise<void> {
-  const restPromise = fetch(`${databaseURL}/${path}.json`, {
-    method: "PATCH",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(patchData),
-  }).catch((err) => {
-    if (import.meta.env.DEV) console.warn(`[RTDB REST PATCH ${path}]`, err);
-  });
-
-  const sdkPromise = Promise.race([
-    update(ref(rtdb, path), patchData as object),
-    new Promise((resolve) => setTimeout(resolve, 800)),
-  ]).catch(() => {});
-
-  await Promise.allSettled([restPromise, sdkPromise]);
-}
-
-export async function rtdbDelete(path: string): Promise<void> {
-  const restPromise = fetch(`${databaseURL}/${path}.json`, {
-    method: "DELETE",
-  }).catch((err) => {
-    if (import.meta.env.DEV) console.warn(`[RTDB REST DELETE ${path}]`, err);
-  });
-
-  const sdkPromise = Promise.race([
-    remove(ref(rtdb, path)),
-    new Promise((resolve) => setTimeout(resolve, 800)),
-  ]).catch(() => {});
-
-  await Promise.allSettled([restPromise, sdkPromise]);
-}
-
-export async function rtdbFetch<T>(path: string): Promise<T | null> {
+async function backendFetch<T>(endpoint: string, options: RequestInit = {}): Promise<T | null> {
+  const base = getApiBase();
+  const url = `${base}${endpoint.startsWith("/") ? endpoint : `/${endpoint}`}`;
   try {
-    const res = await fetch(`${databaseURL}/${path}.json`);
+    const res = await fetch(url, {
+      ...options,
+      headers: {
+        "Content-Type": "application/json",
+        ...(options.headers || {}),
+      },
+    });
     if (!res.ok) return null;
     return (await res.json()) as T;
   } catch {
@@ -146,12 +105,51 @@ export async function rtdbFetch<T>(path: string): Promise<T | null> {
   }
 }
 
+// Legacy RTDB helpers kept for backwards compatibility with any remaining code
+export async function rtdbPut<T>(path: string, data: T): Promise<void> {
+  if (path.startsWith("users/")) {
+    const payload = data as Partial<UserProfile>;
+    if (payload && payload.email) {
+      await rtdbService.saveUserProfile(payload.uid || path.replace("users/", ""), payload);
+    }
+  }
+}
+
+export async function rtdbPatch<T>(path: string, patchData: T): Promise<void> {
+  if (path.startsWith("users/")) {
+    const uid = path.replace("users/", "");
+    const patch = patchData as any;
+    if (patch.role) await rtdbService.setUserRole(uid, patch.role);
+    if (patch.status) await rtdbService.setUserStatus(uid, patch.status);
+  }
+}
+
+export async function rtdbDelete(path: string): Promise<void> {
+  if (path.startsWith("users/")) {
+    await rtdbService.deleteUser(path.replace("users/", ""));
+  }
+}
+
+export async function rtdbFetch<T>(path: string): Promise<T | null> {
+  if (path === "users") {
+    const users = await backendFetch<UserProfile[]>("/api/users");
+    if (users) {
+      const map: Record<string, UserProfile> = {};
+      users.forEach((u) => { map[u.uid] = u; });
+      return map as unknown as T;
+    }
+  }
+  return null;
+}
+
+// ============================================================
+// RTDB SERVICE (MIGRATED TO POSTGRESQL 18 VIA FASTAPI)
+// ============================================================
 export const rtdbService = {
   // ==========================================
-  // USERS & MEMBERS MANAGEMENT
+  // USERS MANAGEMENT (PostgreSQL 'users' table)
   // ==========================================
   subscribeToUsers: (callback: (users: UserProfile[]) => void): (() => void) => {
-    // 1. Immediately provide cached users so screen is never blank
     const cached = localStorage.getItem(CACHE_USERS_KEY);
     if (cached) {
       try {
@@ -162,94 +160,106 @@ export const rtdbService = {
       } catch {}
     }
 
-    // Direct REST fetch on mount to guarantee fresh users even without WebSocket
-    rtdbFetch<Record<string, UserProfile>>("users").then((raw) => {
-      if (raw) {
-        const list = Object.entries(raw).map(([uid, u]) => ({
-          ...u,
-          uid,
-        }));
-        localStorage.setItem(CACHE_USERS_KEY, JSON.stringify(list));
-        callback(list);
-      } else {
-        rtdbService.seedDefaultAdmin();
+    let isSubscribed = true;
+    const fetchUsers = async () => {
+      const data = await backendFetch<UserProfile[]>("/api/users");
+      if (data && isSubscribed) {
+        localStorage.setItem(CACHE_USERS_KEY, JSON.stringify(data));
+        callback(data);
       }
-    });
+    };
 
-    try {
-      const usersRef = ref(rtdb, "users");
-      return onValue(
-        usersRef,
-        (snapshot) => {
-          if (snapshot.exists()) {
-            const raw = snapshot.val() as Record<string, UserProfile>;
-            const list = Object.entries(raw).map(([uid, u]) => ({
-              ...u,
-              uid,
-            }));
-            localStorage.setItem(CACHE_USERS_KEY, JSON.stringify(list));
-            callback(list);
-          }
-        },
-        () => {}
-      );
-    } catch {
-      return () => {};
-    }
+    fetchUsers();
+    const interval = window.setInterval(fetchUsers, 2500);
+
+    return () => {
+      isSubscribed = false;
+      clearInterval(interval);
+    };
   },
 
   seedDefaultAdmin: async (): Promise<void> => {
-    const adminProfile: UserProfile = {
-      uid: "admin-root-01",
-      name: "Sriram Kanuri (Admin)",
-      email: "sriramkanuri4@gmail.com",
-      role: "admin",
-      status: "active",
-      isAdmin: true,
-      mfaEnabled: true,
-      createdAt: new Date().toISOString(),
-      lastLogin: new Date().toISOString(),
-      lastSeen: new Date().toISOString(),
-    };
-    await rtdbService.saveUserProfile("admin-root-01", adminProfile);
+    await backendFetch("/api/users", {
+      method: "POST",
+      body: JSON.stringify({
+        name: "Sriram Kanuri",
+        email: "sriramkanuri4@gmail.com",
+        role: "admin",
+        is_active: true,
+      }),
+    });
   },
 
   getUserProfile: async (uid: string): Promise<UserProfile | null> => {
-    try {
-      const restData = await rtdbFetch<UserProfile>(`users/${uid}`);
-      if (restData) {
-        return { ...restData, uid };
-      }
-    } catch {}
+    const data = await backendFetch<UserProfile>(`/api/users/profile?uid=${encodeURIComponent(uid)}`);
+    if (data) return data;
 
-    try {
-      const userRef = ref(rtdb, `users/${uid}`);
-      const snap = await Promise.race([
-        get(userRef),
-        new Promise<null>((resolve) => setTimeout(() => resolve(null), 1000)),
-      ]);
-      if (snap && snap.exists()) {
-        return { ...snap.val(), uid };
-      }
-      return null;
-    } catch {
-      return null;
+    const cached = localStorage.getItem(CACHE_USERS_KEY);
+    if (cached) {
+      try {
+        const list: any[] = JSON.parse(cached);
+        const match = list.find((u) => u.uid === uid || u.id === uid || u.firebase_uid === uid);
+        if (match) return match as UserProfile;
+      } catch {}
     }
+    return null;
   },
 
   saveUserProfile: async (uid: string, profile: Partial<UserProfile>): Promise<void> => {
+    const cleanEmail = (profile.email || "").trim().toLowerCase();
+    const isAdmin =
+      profile.isAdmin === true ||
+      profile.role === "admin" ||
+      cleanEmail === "sriramkanuri4@gmail.com";
+    const role = isAdmin ? "admin" : "member";
+    const status = profile.status || ((profile as any).is_active === false ? "disabled" : "active");
+    const isActive = status === "active";
+
     const payload = {
-      ...profile,
-      uid,
-      lastSeen: new Date().toISOString(),
+      name: profile.name,
+      email: cleanEmail || "sriramkanuri4@gmail.com",
+      phone: profile.phone,
+      role,
+      isAdmin,
+      status,
+      is_active: isActive,
+      firebase_uid: profile.uid || uid,
+      profile_image: (profile as any).profile_image || profile.avatarUrl || profile.photoURL,
     };
 
-    await rtdbPut(`users/${uid}`, payload);
+    // 1. Post to PostgreSQL users table
+    await backendFetch("/api/users", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+
+    // 2. Also execute direct PUT if updating existing user by email or uid
+    if (cleanEmail) {
+      await backendFetch(`/api/users/${encodeURIComponent(cleanEmail)}`, {
+        method: "PUT",
+        body: JSON.stringify(payload),
+      });
+    }
 
     try {
       const cached = localStorage.getItem(CACHE_USERS_KEY);
       const list: UserProfile[] = cached ? JSON.parse(cached) : [];
-      const updated = [...list.filter((u) => u.uid !== uid), payload as UserProfile];
+      const updatedUser: UserProfile = {
+        uid: profile.uid || uid,
+        name: profile.name || cleanEmail.split("@")[0],
+        email: cleanEmail,
+        phone: profile.phone,
+        role,
+        isAdmin,
+        status,
+        mfaEnabled: profile.mfaEnabled ?? false,
+        createdAt: profile.createdAt || new Date().toISOString(),
+        lastSeen: new Date().toISOString(),
+      };
+      const updated = [
+        ...list.filter((u) => u.uid !== uid && u.email?.toLowerCase() !== cleanEmail),
+        updatedUser,
+      ];
       localStorage.setItem(CACHE_USERS_KEY, JSON.stringify(updated));
     } catch {}
   },
@@ -257,75 +267,30 @@ export const rtdbService = {
   saveMfaSecret: async (email: string, secret: string): Promise<void> => {
     try {
       const cleanEmail = email.trim().toLowerCase();
-      const key = cleanEmail.replace(/[^a-zA-Z0-9]/g, "_");
-      const mfaRef = ref(rtdb, `mfa_store/${key}`);
-      await set(mfaRef, {
-        email: cleanEmail,
-        secret,
-        enabled: true,
-        updatedAt: new Date().toISOString(),
-      });
-      // Also update users/usr_{key}
-      const userRef = ref(rtdb, `users/usr_${key}`);
-      await update(userRef, {
-        mfaSecret: secret,
-        mfaEnabled: true,
-        email: cleanEmail,
-      });
-      if (cleanEmail === "sriramkanuri4@gmail.com") {
-        await update(ref(rtdb, "users/admin-root-01"), {
-          mfaSecret: secret,
-          mfaEnabled: true,
+      localStorage.setItem(`gridguard_mfa_${cleanEmail}`, secret);
+      const user = await rtdbService.findUserProfileByEmail(cleanEmail);
+      if (user) {
+        await backendFetch(`/api/users/${user.uid}`, {
+          method: "PUT",
+          body: JSON.stringify({ mfaSecret: secret, mfaEnabled: true }),
         });
       }
     } catch (err) {
-      console.warn("[RTDB] Failed saving MFA secret:", err);
+      console.warn("[PostgreSQL] Failed saving MFA secret:", err);
     }
   },
 
   getMfaSecret: async (email: string): Promise<string | null> => {
     try {
       const cleanEmail = email.trim().toLowerCase();
-      const key = cleanEmail.replace(/[^a-zA-Z0-9]/g, "_");
+      const local = localStorage.getItem(`gridguard_mfa_${cleanEmail}`);
+      if (local) return local;
 
-      // Check mfa_store
-      const mfaRef = ref(rtdb, `mfa_store/${key}`);
-      const mfaSnap = await get(mfaRef);
-      if (mfaSnap.exists() && mfaSnap.val()?.secret) {
-        return mfaSnap.val().secret;
-      }
-
-      // Check users/usr_{key}
-      const userRef = ref(rtdb, `users/usr_${key}`);
-      const userSnap = await get(userRef);
-      if (userSnap.exists() && userSnap.val()?.mfaSecret) {
-        return userSnap.val().mfaSecret;
-      }
-
-      // Check users/admin-root-01 if admin email
-      if (cleanEmail === "sriramkanuri4@gmail.com") {
-        const adminRef = ref(rtdb, "users/admin-root-01");
-        const adminSnap = await get(adminRef);
-        if (adminSnap.exists() && adminSnap.val()?.mfaSecret) {
-          return adminSnap.val().mfaSecret;
-        }
-      }
-
-      // Search all users in users/
-      const allRef = ref(rtdb, "users");
-      const allSnap = await get(allRef);
-      if (allSnap.exists()) {
-        const val = allSnap.val() as Record<string, UserProfile>;
-        for (const u of Object.values(val)) {
-          if (u.email && u.email.trim().toLowerCase() === cleanEmail && u.mfaSecret) {
-            return u.mfaSecret;
-          }
-        }
-      }
+      const user = await rtdbService.findUserProfileByEmail(cleanEmail);
+      if (user && user.mfaSecret) return user.mfaSecret;
 
       return null;
-    } catch (err) {
-      console.warn("[RTDB] Error fetching MFA secret:", err);
+    } catch {
       return null;
     }
   },
@@ -333,78 +298,108 @@ export const rtdbService = {
   removeMfaSecret: async (email: string): Promise<void> => {
     try {
       const cleanEmail = email.trim().toLowerCase();
-      const key = cleanEmail.replace(/[^a-zA-Z0-9]/g, "_");
-      await remove(ref(rtdb, `mfa_store/${key}`));
-      await update(ref(rtdb, `users/usr_${key}`), { mfaSecret: null, mfaEnabled: false });
-      if (cleanEmail === "sriramkanuri4@gmail.com") {
-        await update(ref(rtdb, "users/admin-root-01"), { mfaSecret: null, mfaEnabled: false });
+      localStorage.removeItem(`gridguard_mfa_${cleanEmail}`);
+      const user = await rtdbService.findUserProfileByEmail(cleanEmail);
+      if (user) {
+        await backendFetch(`/api/users/${user.uid}`, {
+          method: "PUT",
+          body: JSON.stringify({ mfaSecret: null, mfaEnabled: false }),
+        });
       }
     } catch (err) {
-      console.warn("[RTDB] Failed removing MFA secret:", err);
+      console.warn("[PostgreSQL] Failed removing MFA secret:", err);
     }
   },
 
   findUserProfileByEmail: async (email: string): Promise<UserProfile | null> => {
-    try {
-      const cleanEmail = email.trim().toLowerCase();
-      const key = cleanEmail.replace(/[^a-zA-Z0-9]/g, "_");
+    const cleanEmail = email.trim().toLowerCase();
+    const data = await backendFetch<UserProfile>(`/api/users/profile?email=${encodeURIComponent(cleanEmail)}`);
+    if (data) return data;
 
-      const direct = await rtdbService.getUserProfile(`usr_${key}`);
-      if (direct) return direct;
-
-      if (cleanEmail === "sriramkanuri4@gmail.com") {
-        const admin = await rtdbService.getUserProfile("admin-root-01");
-        if (admin) return admin;
-      }
-
-      const allRef = ref(rtdb, "users");
-      const snap = await get(allRef);
-      if (snap.exists()) {
-        const raw = snap.val() as Record<string, UserProfile>;
-        for (const [uid, u] of Object.entries(raw)) {
-          if (u.email && u.email.trim().toLowerCase() === cleanEmail) {
-            return { ...u, uid };
-          }
-        }
-      }
-      return null;
-    } catch {
-      return null;
+    const cached = localStorage.getItem(CACHE_USERS_KEY);
+    if (cached) {
+      try {
+        const list: UserProfile[] = JSON.parse(cached);
+        const match = list.find((u) => u.email && u.email.trim().toLowerCase() === cleanEmail);
+        if (match) return match;
+      } catch {}
     }
+    return null;
   },
 
-  setUserStatus: async (uid: string, status: "active" | "disabled"): Promise<void> => {
-    await rtdbPatch(`users/${uid}`, { status });
+  setUserStatus: async (uid: string, status: "active" | "disabled", email?: string): Promise<void> => {
+    const payload = { status, is_active: status === "active" };
+    await backendFetch(`/api/users/${encodeURIComponent(uid)}`, {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    });
+    if (email && email.includes("@")) {
+      await backendFetch(`/api/users/${encodeURIComponent(email.trim().toLowerCase())}`, {
+        method: "PUT",
+        body: JSON.stringify(payload),
+      });
+    }
+
     try {
       const cached = localStorage.getItem(CACHE_USERS_KEY);
       if (cached) {
         const list: UserProfile[] = JSON.parse(cached);
-        const updated = list.map((u) => (u.uid === uid ? { ...u, status } : u));
+        const updated = list.map((u) =>
+          u.uid === uid || (email && u.email?.toLowerCase() === email.toLowerCase())
+            ? { ...u, status, is_active: status === "active" }
+            : u
+        );
         localStorage.setItem(CACHE_USERS_KEY, JSON.stringify(updated));
       }
     } catch {}
   },
 
-  setUserRole: async (uid: string, role: "admin" | "member"): Promise<void> => {
-    const payload = { role, isAdmin: role === "admin" };
-    await rtdbPatch(`users/${uid}`, payload);
+  setUserRole: async (uid: string, role: "admin" | "member", email?: string): Promise<void> => {
+    const isAdmin = role === "admin";
+    const payload = { role, isAdmin };
+    await backendFetch(`/api/users/${encodeURIComponent(uid)}`, {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    });
+    if (email && email.includes("@")) {
+      await backendFetch(`/api/users/${encodeURIComponent(email.trim().toLowerCase())}`, {
+        method: "PUT",
+        body: JSON.stringify(payload),
+      });
+    }
+
     try {
       const cached = localStorage.getItem(CACHE_USERS_KEY);
       if (cached) {
         const list: UserProfile[] = JSON.parse(cached);
-        const updated = list.map((u) => (u.uid === uid ? { ...u, ...payload } : u));
+        const updated = list.map((u) =>
+          u.uid === uid || (email && u.email?.toLowerCase() === email.toLowerCase())
+            ? { ...u, role, isAdmin }
+            : u
+        );
         localStorage.setItem(CACHE_USERS_KEY, JSON.stringify(updated));
       }
     } catch {}
   },
 
-  deleteUser: async (uid: string): Promise<void> => {
-    await rtdbDelete(`users/${uid}`);
+  deleteUser: async (uid: string, email?: string): Promise<void> => {
+    await backendFetch(`/api/users/${encodeURIComponent(uid)}`, {
+      method: "DELETE",
+    });
+    if (email && email.includes("@")) {
+      await backendFetch(`/api/users/${encodeURIComponent(email.trim().toLowerCase())}`, {
+        method: "DELETE",
+      });
+    }
+
     try {
       const cached = localStorage.getItem(CACHE_USERS_KEY);
       if (cached) {
         const list: UserProfile[] = JSON.parse(cached);
-        localStorage.setItem(CACHE_USERS_KEY, JSON.stringify(list.filter((u) => u.uid !== uid)));
+        localStorage.setItem(
+          CACHE_USERS_KEY,
+          JSON.stringify(list.filter((u) => u.uid !== uid && (!email || u.email?.toLowerCase() !== email.toLowerCase())))
+        );
       }
     } catch {}
   },
@@ -413,120 +408,84 @@ export const rtdbService = {
     const emails = new Set<string>();
     emails.add("sriramkanuri4@gmail.com");
 
-    try {
-      const raw = await rtdbFetch<Record<string, UserProfile>>("users");
-      if (raw && typeof raw === "object") {
-        Object.values(raw).forEach((u) => {
-          if (u && u.email && typeof u.email === "string" && u.email.includes("@")) {
-            emails.add(u.email.trim().toLowerCase());
-          }
-        });
-      }
-    } catch {}
-
-    // Include operators who registered or requested OTP
-    try {
-      const otps = await rtdbFetch<Record<string, { email?: string }>>("auth_otps");
-      if (otps && typeof otps === "object") {
-        Object.values(otps).forEach((item) => {
-          if (item && item.email && typeof item.email === "string" && item.email.includes("@")) {
-            emails.add(item.email.trim().toLowerCase());
-          }
-        });
-      }
-    } catch {}
-
-    try {
-      const cached = localStorage.getItem(CACHE_USERS_KEY);
-      if (cached) {
-        const list: UserProfile[] = JSON.parse(cached);
-        list.forEach((u) => {
-          if (u && u.email && typeof u.email === "string" && u.email.includes("@")) {
-            emails.add(u.email.trim().toLowerCase());
-          }
-        });
-      }
-    } catch {}
+    const users = await backendFetch<UserProfile[]>("/api/users");
+    if (users && Array.isArray(users)) {
+      users.forEach((u) => {
+        if (u.email && u.email.includes("@")) {
+          emails.add(u.email.trim().toLowerCase());
+        }
+      });
+    }
 
     return Array.from(emails);
   },
 
   // ==========================================
-  // REAL-TIME TELEMETRY (BY NODE)
+  // REAL-TIME TELEMETRY (PostgreSQL 'sensor_readings' & 'grid_telemetry')
   // ==========================================
   subscribeToTelemetry: (
     nodeId: string,
     callback: (data: RealtimeTelemetry | null) => void
   ): (() => void) => {
-    try {
-      const telRef = ref(rtdb, `telemetry/${nodeId}`);
-      return onValue(
-        telRef,
-        (snapshot) => {
-          if (snapshot.exists()) {
-            callback(snapshot.val() as RealtimeTelemetry);
-          } else {
-            callback(null);
-          }
-        },
-        () => callback(null)
-      );
-    } catch {
-      return () => {};
-    }
+    let isSubscribed = true;
+
+    const fetchLive = async () => {
+      const data = await backendFetch<RealtimeTelemetry>(`/api/telemetry/live/${encodeURIComponent(nodeId)}`);
+      if (data && isSubscribed) {
+        callback(data);
+      }
+    };
+
+    fetchLive();
+    const interval = window.setInterval(fetchLive, 1000);
+
+    return () => {
+      isSubscribed = false;
+      clearInterval(interval);
+    };
   },
 
   subscribeToAllTelemetry: (
     callback: (telemetryMap: Record<string, RealtimeTelemetry>) => void
   ): (() => void) => {
-    try {
-      const allTelRef = ref(rtdb, "telemetry");
-      return onValue(
-        allTelRef,
-        (snapshot) => {
-          if (snapshot.exists()) {
-            callback(snapshot.val() as Record<string, RealtimeTelemetry>);
-          } else {
-            callback({});
-          }
-        },
-        () => callback({})
-      );
-    } catch {
-      return () => {};
-    }
+    let isSubscribed = true;
+
+    const fetchAll = async () => {
+      const data = await backendFetch<Record<string, RealtimeTelemetry>>("/api/telemetry/live");
+      if (data && isSubscribed) {
+        callback(data);
+      }
+    };
+
+    fetchAll();
+    const interval = window.setInterval(fetchAll, 1000);
+
+    return () => {
+      isSubscribed = false;
+      clearInterval(interval);
+    };
   },
 
   pushTelemetry: async (nodeId: string, data: Partial<RealtimeTelemetry>): Promise<void> => {
-    const payload: RealtimeTelemetry = {
-      nodeId,
-      timestamp: new Date().toISOString(),
-      voltage: data.voltage ?? 230.0,
-      current: data.current ?? 12.0,
-      power: data.power ?? 4.5,
-      energy: data.energy ?? 45.0,
-      temperature: data.temperature ?? 35.0,
-      irradiance: data.irradiance ?? 850.0,
-      efficiency: data.efficiency ?? 92.5,
-      frequency: data.frequency ?? 50.02,
-      powerFactor: data.powerFactor ?? 0.98,
-      status: data.status || "ONLINE",
-    };
-
-    await rtdbPut(`telemetry/${nodeId}`, payload);
-    await rtdbPatch(`nodes/${nodeId}`, {
-      voltage: payload.voltage,
-      current: payload.current,
-      power: payload.power,
-      energy: payload.energy,
-      temperature: payload.temperature,
-      lastSeen: payload.timestamp,
-      status: payload.status,
+    await backendFetch("/api/telemetry", {
+      method: "POST",
+      body: JSON.stringify({
+        nodeId,
+        voltage: data.voltage ?? 230.0,
+        current: data.current ?? 12.0,
+        power: data.power ?? 4.5,
+        energy: data.energy ?? 45.0,
+        temperature: data.temperature ?? 35.0,
+        irradiance: data.irradiance ?? 850.0,
+        frequency: data.frequency ?? 50.02,
+        powerFactor: data.powerFactor ?? 0.98,
+        status: data.status || "ONLINE",
+      }),
     });
   },
 
   // ==========================================
-  // SOLAR NODES MANAGEMENT
+  // SOLAR NODES MANAGEMENT (PostgreSQL 'solar_nodes')
   // ==========================================
   subscribeToNodes: (callback: (nodes: SolarNode[]) => void): (() => void) => {
     const cached = localStorage.getItem(CACHE_NODES_KEY);
@@ -539,53 +498,40 @@ export const rtdbService = {
       } catch {}
     }
 
-    // Direct REST fetch on mount to guarantee fresh nodes even without WebSocket
-    rtdbFetch<Record<string, SolarNode>>("nodes").then((raw) => {
-      if (raw) {
-        const list = Object.entries(raw).map(([nodeId, n]) => ({
-          ...n,
-          nodeId,
-        }));
-        localStorage.setItem(CACHE_NODES_KEY, JSON.stringify(list));
-        callback(list);
+    let isSubscribed = true;
+    const fetchNodes = async () => {
+      const data = await backendFetch<SolarNode[]>("/api/nodes");
+      if (data && isSubscribed) {
+        localStorage.setItem(CACHE_NODES_KEY, JSON.stringify(data));
+        callback(data);
       }
-    });
+    };
 
-    try {
-      const nodesRef = ref(rtdb, "nodes");
-      return onValue(
-        nodesRef,
-        (snapshot) => {
-          if (snapshot.exists()) {
-            const raw = snapshot.val() as Record<string, SolarNode>;
-            const list = Object.entries(raw).map(([nodeId, n]) => ({
-              ...n,
-              nodeId,
-            }));
-            localStorage.setItem(CACHE_NODES_KEY, JSON.stringify(list));
-            callback(list);
-          }
-        },
-        () => {}
-      );
-    } catch {
-      return () => {};
-    }
+    fetchNodes();
+    const interval = window.setInterval(fetchNodes, 2000);
+
+    return () => {
+      isSubscribed = false;
+      clearInterval(interval);
+    };
   },
 
   createOrUpdateNode: async (nodeId: string, nodeData: Partial<SolarNode>): Promise<void> => {
-    const payload = {
-      ...nodeData,
-      nodeId,
-      lastSeen: new Date().toISOString(),
-    };
-
-    await rtdbPut(`nodes/${nodeId}`, payload);
+    await backendFetch("/api/nodes", {
+      method: "POST",
+      body: JSON.stringify({
+        nodeId,
+        name: nodeData.name || nodeId,
+        location: nodeData.location,
+        status: nodeData.status || "ONLINE",
+        firmware_version: nodeData.firmware,
+      }),
+    });
 
     try {
       const cached = localStorage.getItem(CACHE_NODES_KEY);
       const list: SolarNode[] = cached ? JSON.parse(cached) : [];
-      const updated = [...list.filter((n) => n.nodeId !== nodeId), payload as SolarNode];
+      const updated = [...list.filter((n) => n.nodeId !== nodeId), { ...nodeData, nodeId } as SolarNode];
       localStorage.setItem(CACHE_NODES_KEY, JSON.stringify(updated));
     } catch {}
   },
@@ -594,20 +540,17 @@ export const rtdbService = {
     nodeId: string,
     status: "ONLINE" | "OFFLINE" | "WARNING" | "CRITICAL"
   ): Promise<void> => {
-    await rtdbPatch(`nodes/${nodeId}`, { status, lastSeen: new Date().toISOString() });
-    try {
-      const cached = localStorage.getItem(CACHE_NODES_KEY);
-      if (cached) {
-        const list: SolarNode[] = JSON.parse(cached);
-        const updated = list.map((n) => (n.nodeId === nodeId ? { ...n, status } : n));
-        localStorage.setItem(CACHE_NODES_KEY, JSON.stringify(updated));
-      }
-    } catch {}
+    await backendFetch(`/api/nodes/${encodeURIComponent(nodeId)}`, {
+      method: "PUT",
+      body: JSON.stringify({ status }),
+    });
   },
 
   deleteNode: async (nodeId: string): Promise<void> => {
-    await rtdbDelete(`nodes/${nodeId}`);
-    await rtdbDelete(`telemetry/${nodeId}`);
+    await backendFetch(`/api/nodes/${encodeURIComponent(nodeId)}`, {
+      method: "DELETE",
+    });
+
     try {
       const cached = localStorage.getItem(CACHE_NODES_KEY);
       if (cached) {
@@ -618,7 +561,7 @@ export const rtdbService = {
   },
 
   // ==========================================
-  // REAL-TIME ALERTS
+  // ALERTS (PostgreSQL 'alerts' table)
   // ==========================================
   subscribeToAlerts: (callback: (alerts: Alert[]) => void): (() => void) => {
     const cached = localStorage.getItem(CACHE_ALERTS_KEY);
@@ -631,107 +574,66 @@ export const rtdbService = {
       } catch {}
     }
 
-    // Direct REST fetch on mount to guarantee fresh alerts even without WebSocket
-    rtdbFetch<Record<string, Alert>>("alerts").then((raw) => {
-      if (raw) {
-        const list = Object.entries(raw)
-          .map(([id, a]) => ({ ...a, id }))
-          .sort((a, b) => new Date(String(b.timestamp)).getTime() - new Date(String(a.timestamp)).getTime());
-        localStorage.setItem(CACHE_ALERTS_KEY, JSON.stringify(list));
-        callback(list);
-      } else {
-        rtdbService.seedDefaultAlerts();
+    let isSubscribed = true;
+    const fetchAlerts = async () => {
+      const data = await backendFetch<Alert[]>("/api/alerts");
+      if (data && isSubscribed) {
+        localStorage.setItem(CACHE_ALERTS_KEY, JSON.stringify(data));
+        callback(data);
       }
-    });
+    };
 
-    try {
-      const alertsRef = ref(rtdb, "alerts");
-      return onValue(
-        alertsRef,
-        (snapshot) => {
-          if (snapshot.exists()) {
-            const raw = snapshot.val() as Record<string, Alert>;
-            const list = Object.entries(raw)
-              .map(([id, a]) => ({ ...a, id }))
-              .sort((a, b) => new Date(String(b.timestamp)).getTime() - new Date(String(a.timestamp)).getTime());
-            localStorage.setItem(CACHE_ALERTS_KEY, JSON.stringify(list));
-            callback(list);
-          }
-        },
-        () => {}
-      );
-    } catch {
-      return () => {};
-    }
+    fetchAlerts();
+    const interval = window.setInterval(fetchAlerts, 2000);
+
+    return () => {
+      isSubscribed = false;
+      clearInterval(interval);
+    };
   },
 
   seedDefaultAlerts: async (): Promise<void> => {
-    const initialAlert: Alert = {
-      id: "alert-init-01",
-      nodeId: "GG-NODE-01",
-      type: "voltage",
-      severity: "INFO",
-      message: "Real-time telemetry stream synchronized with Firebase RTDB.",
-      value: 231.2,
-      threshold: 245.0,
-      resolved: false,
-      status: "OPEN",
-      acknowledged: false,
-      timestamp: new Date().toISOString(),
-    };
-    await rtdbPut("alerts/alert-init-01", initialAlert);
-    localStorage.setItem(CACHE_ALERTS_KEY, JSON.stringify([initialAlert]));
+    await backendFetch("/api/alerts", {
+      method: "POST",
+      body: JSON.stringify({
+        nodeId: "GG-NODE-01",
+        type: "system",
+        severity: "INFO",
+        title: "Grid Guard System Online",
+        message: "Synchronized with PostgreSQL 18 persistent database.",
+        value: 231.2,
+        threshold: 245.0,
+      }),
+    });
   },
 
   createAlert: async (alertData: Omit<Alert, "id">): Promise<string> => {
-    const id = "alt_" + Date.now();
-    const payload: Alert = {
-      ...alertData,
-      id,
-      timestamp: alertData.timestamp || new Date().toISOString(),
-    };
-    await rtdbPut(`alerts/${id}`, payload);
-    try {
-      const cached = localStorage.getItem(CACHE_ALERTS_KEY);
-      const list: Alert[] = cached ? JSON.parse(cached) : [];
-      const updated = [payload, ...list.filter((a) => a.id !== id)];
-      localStorage.setItem(CACHE_ALERTS_KEY, JSON.stringify(updated));
-    } catch {}
-    return id;
+    const res = await backendFetch<{ success: boolean; id: string }>("/api/alerts", {
+      method: "POST",
+      body: JSON.stringify({
+        nodeId: alertData.nodeId || "GG-NODE-01",
+        type: alertData.type || "system",
+        severity: alertData.severity || "INFO",
+        title: (alertData as any).title || alertData.message,
+        message: alertData.message,
+        value: alertData.value,
+        threshold: alertData.threshold,
+      }),
+    });
+    return res?.id || `alt_${Date.now()}`;
   },
 
   acknowledgeAlert: async (alertId: string, userEmail: string): Promise<void> => {
-    const patch = {
-      acknowledged: true,
-      acknowledgedBy: userEmail,
-      acknowledgedAt: new Date().toISOString(),
-    };
-    await rtdbPatch(`alerts/${alertId}`, patch);
-    try {
-      const cached = localStorage.getItem(CACHE_ALERTS_KEY);
-      if (cached) {
-        const list: Alert[] = JSON.parse(cached);
-        const updated = list.map((a) => (a.id === alertId ? { ...a, ...patch } : a));
-        localStorage.setItem(CACHE_ALERTS_KEY, JSON.stringify(updated));
-      }
-    } catch {}
+    await backendFetch(`/api/alerts/${encodeURIComponent(alertId)}/acknowledge`, {
+      method: "POST",
+      body: JSON.stringify({ acknowledgedBy: userEmail }),
+    });
   },
 
   resolveAlert: async (alertId: string): Promise<void> => {
-    const patch = {
-      resolved: true,
-      status: "RESOLVED" as const,
-      resolvedAt: new Date().toISOString(),
-    };
-    await rtdbPatch(`alerts/${alertId}`, patch);
-    try {
-      const cached = localStorage.getItem(CACHE_ALERTS_KEY);
-      if (cached) {
-        const list: Alert[] = JSON.parse(cached);
-        const updated = list.map((a) => (a.id === alertId ? { ...a, ...patch } : a));
-        localStorage.setItem(CACHE_ALERTS_KEY, JSON.stringify(updated));
-      }
-    } catch {}
+    await backendFetch(`/api/alerts/${encodeURIComponent(alertId)}/resolve`, {
+      method: "POST",
+    });
   },
 
   // ==========================================
@@ -741,55 +643,59 @@ export const rtdbService = {
     recipientUid: string,
     callback: (notifs: SystemNotification[]) => void
   ): (() => void) => {
-    try {
-      const notifsRef = ref(rtdb, "notifications");
-      return onValue(
-        notifsRef,
-        (snapshot) => {
-          if (snapshot.exists()) {
-            const raw = snapshot.val() as Record<string, SystemNotification>;
-            const list = Object.entries(raw)
-              .map(([id, n]) => ({ ...n, id }))
-              .filter((n) => n.recipientUid === recipientUid || n.recipientUid === "all")
-              .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
-            callback(list);
-          } else {
-            callback([]);
-          }
-        },
-        () => callback([])
-      );
-    } catch {
-      return () => {};
+    const cached = localStorage.getItem(CACHE_NOTIFS_KEY);
+    if (cached) {
+      try {
+        const parsed = JSON.parse(cached);
+        callback(parsed);
+      } catch {}
     }
+
+    let isSubscribed = true;
+    const fetchNotifs = async () => {
+      const alerts = await backendFetch<Alert[]>("/api/alerts");
+      if (alerts && isSubscribed) {
+        const notifs: SystemNotification[] = alerts.map((a) => ({
+          id: a.id,
+          recipientUid,
+          title: (a as any).title || a.message,
+          message: a.message,
+          type: (String(a.severity).toUpperCase() === "CRITICAL" ? "CRITICAL" : String(a.severity).toUpperCase() === "WARNING" ? "WARNING" : "INFO"),
+          timestamp: String(a.timestamp),
+          read: a.acknowledged || false,
+        }));
+        localStorage.setItem(CACHE_NOTIFS_KEY, JSON.stringify(notifs));
+        callback(notifs);
+      }
+    };
+
+    fetchNotifs();
+    const interval = window.setInterval(fetchNotifs, 3000);
+
+    return () => {
+      isSubscribed = false;
+      clearInterval(interval);
+    };
   },
 
   markNotificationRead: async (notifId: string): Promise<void> => {
-    try {
-      const notifRef = ref(rtdb, `notifications/${notifId}`);
-      await update(notifRef, { read: true });
-    } catch (err) {
-      console.warn("[RTDB] Failed marking notification read:", err);
-    }
+    await rtdbService.acknowledgeAlert(notifId, "operator");
   },
 
   sendNotification: async (notif: Omit<SystemNotification, "id">): Promise<void> => {
-    try {
-      const notifsRef = ref(rtdb, "notifications");
-      const newRef = push(notifsRef);
-      await set(newRef, {
-        ...notif,
-        id: newRef.key,
-        timestamp: new Date().toISOString(),
-        read: false,
-      });
-    } catch (err) {
-      console.warn("[RTDB] Failed sending notification:", err);
-    }
+    await rtdbService.createAlert({
+      nodeId: "GG-NODE-01",
+      type: "notification",
+      severity: notif.type === "CRITICAL" ? "CRITICAL" : notif.type === "WARNING" ? "WARNING" : "INFO",
+      message: notif.message,
+      resolved: false,
+      status: "OPEN",
+      timestamp: notif.timestamp || new Date().toISOString(),
+    });
   },
 
   // ==========================================
-  // AUDIT LOGS
+  // AUDIT LOGS (PostgreSQL 'audit_logs')
   // ==========================================
   subscribeToAuditLogs: (callback: (logs: AuditLogEntry[]) => void): (() => void) => {
     const cached = localStorage.getItem(CACHE_LOGS_KEY);
@@ -802,74 +708,34 @@ export const rtdbService = {
       } catch {}
     }
 
-    // Direct REST fetch on mount to guarantee fresh audit logs even without WebSocket
-    rtdbFetch<Record<string, AuditLogEntry>>("auditLogs").then((raw) => {
-      if (raw) {
-        const list = Object.entries(raw)
-          .map(([id, l]) => ({ ...l, id }))
-          .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
-        localStorage.setItem(CACHE_LOGS_KEY, JSON.stringify(list));
-        callback(list);
-      } else {
-        rtdbService.seedDefaultAuditLogs();
+    let isSubscribed = true;
+    const fetchLogs = async () => {
+      const data = await backendFetch<AuditLogEntry[]>("/api/audit-logs");
+      if (data && isSubscribed) {
+        localStorage.setItem(CACHE_LOGS_KEY, JSON.stringify(data));
+        callback(data);
       }
-    });
+    };
 
-    try {
-      const auditRef = ref(rtdb, "auditLogs");
-      return onValue(
-        auditRef,
-        (snapshot) => {
-          if (snapshot.exists()) {
-            const raw = snapshot.val() as Record<string, AuditLogEntry>;
-            const list = Object.entries(raw)
-              .map(([id, l]) => ({ ...l, id }))
-              .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
-            localStorage.setItem(CACHE_LOGS_KEY, JSON.stringify(list));
-            callback(list);
-          }
-        },
-        () => {}
-      );
-    } catch {
-      return () => {};
-    }
+    fetchLogs();
+    const interval = window.setInterval(fetchLogs, 3000);
+
+    return () => {
+      isSubscribed = false;
+      clearInterval(interval);
+    };
   },
 
   seedDefaultAuditLogs: async (): Promise<void> => {
-    const initialLogs: AuditLogEntry[] = [
-      {
-        id: "log_init_01",
-        uid: "admin-root-01",
+    await backendFetch("/api/audit-logs", {
+      method: "POST",
+      body: JSON.stringify({
+        action: "POSTGRESQL_18_MIGRATED",
+        target: "gridguardsolarmonitoring",
+        metadata: { database: "PostgreSQL 18", status: "OPTIMAL" },
         actorEmail: "sriramkanuri4@gmail.com",
-        action: "SYSTEM_INITIALIZED",
-        target: "platform",
-        timestamp: new Date(Date.now() - 3600000).toISOString(),
-        metadata: { status: "OPTIMAL", version: "2.0.0" },
-      },
-      {
-        id: "log_init_02",
-        uid: "admin-root-01",
-        actorEmail: "sriramkanuri4@gmail.com",
-        action: "FIREBASE_RTDB_SYNC",
-        target: "gridguardsolarmonitoring-default-rtdb",
-        timestamp: new Date(Date.now() - 1800000).toISOString(),
-        metadata: { nodes: 2, status: "CONNECTED" },
-      },
-      {
-        id: "log_init_03",
-        uid: "admin-root-01",
-        actorEmail: "sriramkanuri4@gmail.com",
-        action: "ML_MODEL_ARMED",
-        target: "grid_guard_solar_model.joblib",
-        timestamp: new Date(Date.now() - 900000).toISOString(),
-        metadata: { algorithm: "Isolation Forest", features: 8 },
-      },
-    ];
-    for (const l of initialLogs) {
-      await rtdbPut(`auditLogs/${l.id}`, l);
-    }
-    localStorage.setItem(CACHE_LOGS_KEY, JSON.stringify(initialLogs));
+      }),
+    });
   },
 
   logAuditEvent: async (
@@ -879,250 +745,69 @@ export const rtdbService = {
     actorUid?: string,
     actorEmail?: string
   ): Promise<void> => {
-    const id = "log_" + Date.now() + "_" + Math.random().toString(36).substring(2, 6);
-    const payload: AuditLogEntry = {
-      id,
-      uid: actorUid || "system",
-      actorEmail: actorEmail || "sriramkanuri4@gmail.com",
-      action,
-      target: target || "platform",
-      timestamp: new Date().toISOString(),
-      metadata: metadata || {},
-    };
-
-    await rtdbPut(`auditLogs/${id}`, payload);
-
-    try {
-      const cached = localStorage.getItem(CACHE_LOGS_KEY);
-      const list: AuditLogEntry[] = cached ? JSON.parse(cached) : [];
-      const updated = [payload, ...list.filter((l) => l.id !== id)].slice(0, 200);
-      localStorage.setItem(CACHE_LOGS_KEY, JSON.stringify(updated));
-    } catch {}
+    await backendFetch("/api/audit-logs", {
+      method: "POST",
+      body: JSON.stringify({
+        action,
+        target: target || "platform",
+        metadata: metadata || {},
+        actorUid: actorUid || "system",
+        actorEmail: actorEmail || "sriramkanuri4@gmail.com",
+      }),
+    });
   },
 
   // ==========================================
-  // SYSTEM STATE
+  // SYSTEM STATE (PostgreSQL 'system_status')
   // ==========================================
   subscribeToSystem: (callback: (state: SystemState | null) => void): (() => void) => {
-    try {
-      const sysRef = ref(rtdb, "system");
-      return onValue(
-        sysRef,
-        (snapshot) => {
-          if (snapshot.exists()) {
-            const raw = snapshot.val() as any;
-            const normalized: SystemState = {
-              status: raw.status || raw.state?.status || "OPTIMAL",
-              lastUpdate: raw.lastUpdate || raw.state?.lastUpdate || new Date().toISOString(),
-              version: raw.version || raw.state?.version || "2.4.0-prod",
-              maintenanceMode: Boolean(raw.maintenanceMode ?? raw.state?.maintenanceMode ?? false),
-              stopMlDetectionMails: Boolean(raw.stopMlDetectionMails ?? raw.state?.stopMlDetectionMails ?? false),
-            };
-            callback(normalized);
-          } else {
-            callback({
-              status: "OPTIMAL",
-              lastUpdate: new Date().toISOString(),
-              version: "2.4.0-prod",
-              maintenanceMode: false,
-              stopMlDetectionMails: false,
-            });
-          }
-        },
-        () => callback(null)
-      );
-    } catch {
-      return () => {};
-    }
+    let isSubscribed = true;
+
+    const fetchSystem = async () => {
+      const data = await backendFetch<SystemState>("/api/system/status");
+      if (data && isSubscribed) {
+        callback(data);
+      }
+    };
+
+    fetchSystem();
+    const interval = window.setInterval(fetchSystem, 2500);
+
+    return () => {
+      isSubscribed = false;
+      clearInterval(interval);
+    };
   },
 
   updateSystemState: async (state: Partial<SystemState>): Promise<void> => {
-    try {
-      const sysRef = ref(rtdb, "system");
-      await update(sysRef, {
-        ...state,
-        lastUpdate: new Date().toISOString(),
-      });
-      await rtdbPatch("system", {
-        ...state,
-        lastUpdate: new Date().toISOString(),
-      });
-    } catch (err) {
-      console.warn("[RTDB] Failed updating system state:", err);
-    }
+    await backendFetch("/api/system/settings", {
+      method: "POST",
+      body: JSON.stringify(state),
+    });
   },
 
   setMlDetectionEmailsStopped: async (stopped: boolean): Promise<void> => {
-    try {
-      localStorage.setItem("gridguard_stop_ml_detection_mails", JSON.stringify(stopped));
-      await Promise.allSettled([
-        rtdbPatch("system", { stopMlDetectionMails: stopped, lastUpdate: new Date().toISOString() }),
-        rtdbPut("systemSettings/stop_ml_detection_mails", stopped),
-      ]);
-    } catch (err) {
-      console.warn("[RTDB] Failed setting stop_ml_detection_mails:", err);
-    }
+    localStorage.setItem("gridguard_stop_ml_detection_mails", JSON.stringify(stopped));
+    await backendFetch("/api/system/settings", {
+      method: "POST",
+      body: JSON.stringify({ stopMlDetectionMails: stopped, stop_ml_detection_mails: stopped }),
+    });
   },
 
   getMlDetectionEmailsStopped: async (): Promise<boolean> => {
-    try {
-      const cached = localStorage.getItem("gridguard_stop_ml_detection_mails");
-      const rest = await rtdbFetch<boolean>("systemSettings/stop_ml_detection_mails");
-      if (typeof rest === "boolean") return rest;
-      const sys = await rtdbFetch<any>("system");
-      if (sys) {
-        if (typeof sys.stopMlDetectionMails === "boolean") return sys.stopMlDetectionMails;
-        if (sys.state && typeof sys.state.stopMlDetectionMails === "boolean") return sys.state.stopMlDetectionMails;
-      }
-      if (cached !== null) {
-        return JSON.parse(cached);
-      }
-    } catch {}
-    return false;
+    const data = await backendFetch<{ stopMlDetectionMails?: boolean; stop_ml_detection_mails?: boolean }>("/api/system/settings");
+    if (data) {
+      return Boolean(data.stopMlDetectionMails ?? data.stop_ml_detection_mails ?? false);
+    }
+    const cached = localStorage.getItem("gridguard_stop_ml_detection_mails");
+    return cached ? JSON.parse(cached) : false;
   },
 
   // ==========================================
-  // SENSORS MANAGEMENT
+  // SENSORS MANAGEMENT (PostgreSQL 'sensors')
   // ==========================================
   subscribeToSensors: (callback: (sensors: SensorData[]) => void): (() => void) => {
-    // Direct REST fetch on mount
-    rtdbFetch<Record<string, SensorData>>("sensors").then((raw) => {
-      if (raw) {
-        const list = Object.entries(raw).map(([id, s]) => ({
-          ...s,
-          id,
-        }));
-        localStorage.setItem("gridguard_cache_sensors", JSON.stringify(list));
-        callback(list);
-      }
-    });
-
-    try {
-      const sensorsRef = ref(rtdb, "sensors");
-      return onValue(
-        sensorsRef,
-        (snapshot) => {
-          if (snapshot.exists()) {
-            const raw = snapshot.val() as Record<string, SensorData>;
-            const list = Object.entries(raw).map(([id, s]) => ({
-              ...s,
-              id,
-            }));
-            localStorage.setItem("gridguard_cache_sensors", JSON.stringify(list));
-            callback(list);
-          }
-        },
-        () => {}
-      );
-    } catch {
-      return () => {};
-    }
-  },
-
-  addSensor: async (sensor: Omit<SensorData, "id">): Promise<SensorData> => {
-    const id = "SN-" + Date.now().toString().slice(-4);
-    const payload: SensorData = {
-      ...sensor,
-      id,
-      lastSeen: new Date().toISOString(),
-    };
-    await rtdbPut(`sensors/${id}`, payload);
-    return payload;
-  },
-
-  updateSensor: async (sensorId: string, data: Partial<SensorData>): Promise<void> => {
-    await rtdbPatch(`sensors/${sensorId}`, {
-      ...data,
-      lastSeen: new Date().toISOString(),
-    });
-  },
-
-  deleteSensor: async (sensorId: string): Promise<void> => {
-    await rtdbDelete(`sensors/${sensorId}`);
-  },
-
-  saveOtpRecord: async (emailKey: string, payload: any): Promise<void> => {
-    await rtdbPut(`auth_otps/${emailKey}`, payload);
-  },
-
-  getOtpRecord: async (emailKey: string): Promise<any | null> => {
-    const rest = await rtdbFetch<any>(`auth_otps/${emailKey}`);
-    if (rest) return rest;
-    try {
-      const otpRef = ref(rtdb, `auth_otps/${emailKey}`);
-      const snap = await Promise.race([
-        get(otpRef),
-        new Promise<null>((resolve) => setTimeout(() => resolve(null), 1000)),
-      ]);
-      if (snap && snap.exists()) return snap.val();
-    } catch {}
-    return null;
-  },
-
-  removeOtpRecord: async (emailKey: string): Promise<void> => {
-    try {
-      const otpRef = ref(rtdb, `auth_otps/${emailKey}`);
-      await remove(otpRef);
-    } catch {
-      try {
-        await fetch(`${databaseURL}/auth_otps/${emailKey}.json`, { method: "DELETE" });
-      } catch {
-        // ignore
-      }
-    }
-  },
-
-  queueEmailBroadcast: async (payload: any): Promise<void> => {
-    const queueId = `email_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
-    const fullPayload = {
-      ...payload,
-      id: queueId,
-      queuedAt: new Date().toISOString(),
-      status: "PENDING",
-    };
-    await rtdbPut(`email_queue/${queueId}`, fullPayload);
-  },
-
-  queueOtpDispatch: async (email: string, otp: string): Promise<void> => {
-    const queueId = `otp_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
-    const payload = {
-      id: queueId,
-      email,
-      otp,
-      queuedAt: new Date().toISOString(),
-      status: "PENDING",
-    };
-    await rtdbPut(`otp_dispatch_queue/${queueId}`, payload);
-  },
-
-  // ==========================================
-  // ANOMALY DETECTION & ML RECORDS
-  // ==========================================
-  recordAnomaly: async (anomalyData: Omit<AnomalyRecord, "id"> & { id?: string }): Promise<string> => {
-    const id = anomalyData.id || "anom_" + Date.now();
-    const payload: AnomalyRecord = {
-      ...anomalyData,
-      id,
-      timestamp: anomalyData.timestamp || new Date().toISOString(),
-      status: "ABNORMAL",
-      createdAt: new Date().toISOString(),
-      resolved: anomalyData.resolved ?? false,
-    };
-
-    await rtdbPut(`anomalies/${id}`, payload);
-
-    try {
-      const cached = localStorage.getItem(CACHE_ANOMALIES_KEY);
-      const list: AnomalyRecord[] = cached ? JSON.parse(cached) : [];
-      const updated = [payload, ...list.filter((a) => a.id !== id)].slice(0, 100);
-      localStorage.setItem(CACHE_ANOMALIES_KEY, JSON.stringify(updated));
-    } catch {}
-
-    return id;
-  },
-
-  subscribeToAnomalies: (callback: (anomalies: AnomalyRecord[]) => void): (() => void) => {
-    const cached = localStorage.getItem(CACHE_ANOMALIES_KEY);
+    const cached = localStorage.getItem(CACHE_SENSORS_KEY);
     if (cached) {
       try {
         const parsed = JSON.parse(cached);
@@ -1132,41 +817,149 @@ export const rtdbService = {
       } catch {}
     }
 
-    // Direct REST fetch on mount to guarantee fresh anomalies even without WebSocket
-    rtdbFetch<Record<string, AnomalyRecord>>("anomalies").then((raw) => {
-      if (raw) {
-        const list = Object.entries(raw)
-          .map(([id, a]) => ({ ...a, id }))
-          .sort((a, b) => new Date(String(b.timestamp)).getTime() - new Date(String(a.timestamp)).getTime());
-        localStorage.setItem(CACHE_ANOMALIES_KEY, JSON.stringify(list));
-        callback(list);
+    let isSubscribed = true;
+    const fetchSensors = async () => {
+      const data = await backendFetch<SensorData[]>("/api/sensors");
+      if (data && isSubscribed) {
+        localStorage.setItem(CACHE_SENSORS_KEY, JSON.stringify(data));
+        callback(data);
       }
+    };
+
+    fetchSensors();
+    const interval = window.setInterval(fetchSensors, 2000);
+
+    return () => {
+      isSubscribed = false;
+      clearInterval(interval);
+    };
+  },
+
+  addSensor: async (sensor: Omit<SensorData, "id">): Promise<SensorData> => {
+    const sensorId = "SN-" + Date.now().toString().slice(-4);
+    await backendFetch("/api/sensors", {
+      method: "POST",
+      body: JSON.stringify({
+        sensor_id: sensorId,
+        node_id: "GG-NODE-01",
+        name: sensor.name,
+        location: sensor.room,
+        status: sensor.status || "normal",
+        unit: "kW",
+      }),
     });
 
-    try {
-      const anomaliesRef = ref(rtdb, "anomalies");
-      return onValue(
-        anomaliesRef,
-        (snapshot) => {
-          if (snapshot.exists()) {
-            const raw = snapshot.val() as Record<string, AnomalyRecord>;
-            const list = Object.entries(raw)
-              .map(([id, a]) => ({ ...a, id }))
-              .sort((a, b) => new Date(String(b.timestamp)).getTime() - new Date(String(a.timestamp)).getTime());
-            localStorage.setItem(CACHE_ANOMALIES_KEY, JSON.stringify(list));
-            callback(list);
-          }
-        },
-        () => {}
-      );
-    } catch {
-      return () => {};
-    }
+    const created: SensorData = {
+      ...sensor,
+      id: sensorId,
+      lastSeen: new Date().toISOString(),
+    };
+    return created;
+  },
+
+  updateSensor: async (sensorId: string, data: Partial<SensorData>): Promise<void> => {
+    await backendFetch(`/api/sensors/${encodeURIComponent(sensorId)}`, {
+      method: "PUT",
+      body: JSON.stringify(data),
+    });
+  },
+
+  deleteSensor: async (sensorId: string): Promise<void> => {
+    await backendFetch(`/api/sensors/${encodeURIComponent(sensorId)}`, {
+      method: "DELETE",
+    });
+  },
+
+  // ==========================================
+  // OTP & QUEUE DISPATCH
+  // ==========================================
+  saveOtpRecord: async (emailKey: string, payload: any): Promise<void> => {
+    localStorage.setItem(`gridguard_otp_${emailKey}`, JSON.stringify(payload));
+  },
+
+  getOtpRecord: async (emailKey: string): Promise<any | null> => {
+    const local = localStorage.getItem(`gridguard_otp_${emailKey}`);
+    return local ? JSON.parse(local) : null;
+  },
+
+  removeOtpRecord: async (emailKey: string): Promise<void> => {
+    localStorage.removeItem(`gridguard_otp_${emailKey}`);
+  },
+
+  queueEmailBroadcast: async (payload: any): Promise<void> => {
+    await backendFetch("/api/admin/send-email", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+  },
+
+  queueOtpDispatch: async (email: string, otp: string): Promise<void> => {
+    await backendFetch("/api/auth/send-otp", {
+      method: "POST",
+      body: JSON.stringify({ email, otp }),
+    });
+  },
+
+  // ==========================================
+  // ANOMALY DETECTION & ML RECORDS (PostgreSQL 'ml_detections')
+  // ==========================================
+  recordAnomaly: async (anomalyData: Omit<AnomalyRecord, "id"> & { id?: string }): Promise<string> => {
+    const res = await backendFetch<{ success: boolean; id: string }>("/api/alerts", {
+      method: "POST",
+      body: JSON.stringify({
+        nodeId: anomalyData.nodeId || "GG-NODE-01",
+        type: "ANOMALY_DETECTION",
+        severity: "CRITICAL",
+        title: "Isolation Forest Anomaly Flagged",
+        message: anomalyData.message || "Abnormal solar array generation disparity",
+        value: anomalyData.anomalyScore,
+        threshold: 0.0,
+      }),
+    });
+    return res?.id || `anom_${Date.now()}`;
+  },
+
+  subscribeToAnomalies: (callback: (anomalies: AnomalyRecord[]) => void): (() => void) => {
+    let isSubscribed = true;
+
+    const fetchAnoms = async () => {
+      const data = await backendFetch<any[]>("/api/ml/detections");
+      if (data && isSubscribed) {
+        const formatted: AnomalyRecord[] = data.map((d) => ({
+          id: d.id,
+          nodeId: "GG-NODE-01",
+          timestamp: d.timestamp,
+          status: "ABNORMAL",
+          prediction: d.prediction || -1,
+          anomalyScore: d.anomaly_score || -0.5,
+          message: "Isolation Forest flagged abnormal generation disparity",
+          inputs: {
+            dc: d.dc_power || 5800,
+            ac: d.ac_power || 440,
+            ambientTemp: d.ambient_temp || 32,
+            moduleTemp: d.module_temp || 88,
+            irradiation: d.irradiance ? d.irradiance / 1000 : 0.85,
+            hour: 12,
+          },
+          emailAlertSent: true,
+          resolved: false,
+          createdAt: d.timestamp,
+        }));
+        localStorage.setItem(CACHE_ANOMALIES_KEY, JSON.stringify(formatted));
+        callback(formatted);
+      }
+    };
+
+    fetchAnoms();
+    const interval = window.setInterval(fetchAnoms, 2500);
+
+    return () => {
+      isSubscribed = false;
+      clearInterval(interval);
+    };
   },
 
   saveMlInference: async (item: InferenceHistoryItem): Promise<void> => {
-    await rtdbPut(`ml_history/${item.id}`, item);
-
     try {
       const cached = localStorage.getItem(CACHE_ML_HISTORY_KEY);
       const list: InferenceHistoryItem[] = cached ? JSON.parse(cached) : [];
@@ -1176,47 +969,31 @@ export const rtdbService = {
   },
 
   subscribeToMlHistory: (callback: (history: InferenceHistoryItem[]) => void): (() => void) => {
-    const cached = localStorage.getItem(CACHE_ML_HISTORY_KEY);
-    if (cached) {
-      try {
-        const parsed = JSON.parse(cached);
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          callback(parsed);
-        }
-      } catch {}
-    }
+    let isSubscribed = true;
 
-    // Direct REST fetch on mount to guarantee fresh ML history even without WebSocket
-    rtdbFetch<Record<string, InferenceHistoryItem>>("ml_history").then((raw) => {
-      if (raw) {
-        const list = Object.entries(raw)
-          .map(([id, h]) => ({ ...h, id }))
-          .sort((a, b) => new Date(String(b.timestamp)).getTime() - new Date(String(a.timestamp)).getTime())
-          .slice(0, 30);
-        localStorage.setItem(CACHE_ML_HISTORY_KEY, JSON.stringify(list));
-        callback(list);
+    const fetchHistory = async () => {
+      const data = await backendFetch<InferenceHistoryItem[]>("/api/ml/history");
+      if (data && isSubscribed && data.length > 0) {
+        localStorage.setItem(CACHE_ML_HISTORY_KEY, JSON.stringify(data));
+        callback(data);
       }
-    });
+    };
 
-    try {
-      const historyRef = ref(rtdb, "ml_history");
-      return onValue(
-        historyRef,
-        (snapshot) => {
-          if (snapshot.exists()) {
-            const raw = snapshot.val() as Record<string, InferenceHistoryItem>;
-            const list = Object.entries(raw)
-              .map(([id, h]) => ({ ...h, id }))
-              .sort((a, b) => new Date(String(b.timestamp)).getTime() - new Date(String(a.timestamp)).getTime())
-              .slice(0, 30);
-            localStorage.setItem(CACHE_ML_HISTORY_KEY, JSON.stringify(list));
-            callback(list);
-          }
-        },
-        () => {}
-      );
-    } catch {
-      return () => {};
-    }
+    fetchHistory();
+    const interval = window.setInterval(fetchHistory, 2000);
+
+    return () => {
+      isSubscribed = false;
+      clearInterval(interval);
+    };
+  },
+
+  saveUserCredential: async (emailKey: string, pass: string): Promise<void> => {
+    localStorage.setItem(`gridguard_cred_${emailKey}`, pass);
+  },
+
+  getUserCredential: async (emailKey: string): Promise<{ password?: string } | null> => {
+    const pass = localStorage.getItem(`gridguard_cred_${emailKey}`);
+    return pass ? { password: pass } : null;
   },
 };

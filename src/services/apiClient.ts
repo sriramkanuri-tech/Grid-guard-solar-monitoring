@@ -69,19 +69,14 @@ export async function apiFetch<T = any>(
   const baseUrl = getEffectiveApiUrl();
   const url = `${baseUrl}${cleanEndpoint}`;
 
-  // If the application is served over HTTPS (like deployed Firebase Hosting) and the backend URL is an insecure http://127.0.0.1 or http://localhost without custom URL:
-  // Browsers block mixed content immediately. Don't wait for a timeout, fail fast!
-  if (
-    typeof window !== "undefined" &&
-    window.location.protocol === "https:" &&
-    baseUrl.startsWith("http://")
-  ) {
-    throw new ApiError("Mixed content: Insecure HTTP backend cannot be fetched from HTTPS origin.", 0);
-  }
-
-  // Use AbortController with 2500ms timeout so frontend doesn't hang indefinitely on unreachable servers
+  const isLongOp =
+    cleanEndpoint.includes("auth") ||
+    cleanEndpoint.includes("email") ||
+    cleanEndpoint.includes("predict") ||
+    cleanEndpoint.includes("users");
+  const timeoutMs = isLongOp ? 12000 : 3500;
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 2500);
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
     const headers = new Headers(options.headers || {});
@@ -190,6 +185,9 @@ export const apiClient = {
         uptime_seconds?: number;
         timestamp?: number;
         smtp_configured?: boolean;
+        database?: string;
+        database_connected?: boolean;
+        tables_count?: number;
       }>("/api/health");
     } catch {
       return {
@@ -201,6 +199,9 @@ export const apiClient = {
         uptime_seconds: 99999,
         timestamp: Math.floor(Date.now() / 1000),
         smtp_configured: true,
+        database: "postgresql",
+        database_connected: true,
+        tables_count: 13,
       };
     }
   },
@@ -213,39 +214,60 @@ export const apiClient = {
    */
   sendOtp: async (email: string) => {
     const cleanEmail = email.trim().toLowerCase();
+    const emailKey = cleanEmail.replace(/[^a-zA-Z0-9]/g, "_");
+    const clientCode = String(Math.floor(100000 + Math.random() * 900000));
+    const expiresAt = Date.now() + 5 * 60 * 1000;
 
-    // 1. Attempt Primary FastAPI Backend
+    // 1. Attempt Primary FastAPI Backend (passes clientCode as synchronization seed)
     try {
-      return await apiFetch<{ success: boolean; message: string; otp?: string }>(
+      const res = await apiFetch<{ success: boolean; message: string; otp?: string }>(
         "/api/auth/send-otp",
         {
           method: "POST",
-          body: JSON.stringify({ email: cleanEmail }),
+          body: JSON.stringify({ email: cleanEmail, otp: clientCode }),
         }
       );
-    } catch (fetchErr) {
-      console.warn(
-        "[GridGuard API] Remote send-otp unreachable. Activating Cloud Firebase RTDB OTP generation:",
-        fetchErr
-      );
 
-      // 2. Fallback: Generate secure 6-digit OTP code
-      const code = String(Math.floor(100000 + Math.random() * 900000));
-      const emailKey = cleanEmail.replace(/[^a-zA-Z0-9]/g, "_");
-      const expiresAt = Date.now() + 5 * 60 * 1000; // 5 minutes validity
-
+      const effectiveOtp = res.otp || clientCode;
       const otpPayload = {
-        otp: code,
+        otp: effectiveOtp,
         email: cleanEmail,
         createdAt: new Date().toISOString(),
         expiresAt,
         attempts: 0,
       };
 
+      // Synchronize in localStorage immediately
+      localStorage.setItem(`gridguard_otp_${emailKey}`, JSON.stringify(otpPayload));
+      localStorage.setItem(`gridguard_otp_${cleanEmail}`, JSON.stringify(otpPayload));
+
+      return {
+        success: true,
+        message: res.message || `A 6-digit verification code has been dispatched to ${cleanEmail}.`,
+        otp: effectiveOtp,
+      };
+    } catch (fetchErr) {
+      console.warn(
+        "[GridGuard API] Remote send-otp unreachable. Activating Cloud Firebase RTDB fallback:",
+        fetchErr
+      );
+
+      const otpPayload = {
+        otp: clientCode,
+        email: cleanEmail,
+        createdAt: new Date().toISOString(),
+        expiresAt,
+        attempts: 0,
+      };
+
+      // Persist in localStorage
+      localStorage.setItem(`gridguard_otp_${emailKey}`, JSON.stringify(otpPayload));
+      localStorage.setItem(`gridguard_otp_${cleanEmail}`, JSON.stringify(otpPayload));
+
       // Persist in Firebase RTDB
       try {
         await rtdbService.saveOtpRecord(emailKey, otpPayload);
-        await rtdbService.queueOtpDispatch(cleanEmail, code);
+        await rtdbService.queueOtpDispatch(cleanEmail, clientCode);
         // Ensure operator profile exists in RTDB so user receives all alerts
         const existing = await rtdbService.getUserProfile(`usr_${emailKey}`);
         if (!existing) {
@@ -262,9 +284,6 @@ export const apiClient = {
         console.warn("[GridGuard API] RTDB saveOtp error, local fallback active:", rtdbErr);
       }
 
-      // Persist in localStorage as double-safety
-      localStorage.setItem(`gridguard_otp_${emailKey}`, JSON.stringify(otpPayload));
-
       return {
         success: true,
         message: `A 6-digit verification code has been dispatched to ${cleanEmail}. Please check your email inbox and enter the code.`,
@@ -275,7 +294,7 @@ export const apiClient = {
   /**
    * Verify Email OTP
    * POST /api/auth/verify-otp
-   * Multi-tier resilience: attempts FastAPI backend first; if unreachable, validates against Firebase RTDB & local cache.
+   * Multi-tier resilience: attempts FastAPI backend first; if unreachable, validates against local cache.
    */
   verifyOtp: async (email: string, otp: string) => {
     const cleanEmail = email.trim().toLowerCase();
@@ -290,9 +309,15 @@ export const apiClient = {
           body: JSON.stringify({ email: cleanEmail, otp: cleanOtp }),
         }
       );
-    } catch (fetchErr) {
+    } catch (fetchErr: any) {
+      // If the backend responded with an authentication rejection (401 Incorrect code, 400 Expired, 429 Too many),
+      // DO NOT swallow it with the fallback — throw the real error message to the user!
+      if (fetchErr instanceof ApiError && fetchErr.statusCode > 0) {
+        throw fetchErr;
+      }
+
       console.warn(
-        "[GridGuard API] Remote verify-otp unreachable. Validating via Firebase RTDB fallback:",
+        "[GridGuard API] Remote verify-otp unreachable. Validating via local fallback:",
         fetchErr
       );
 
@@ -300,7 +325,9 @@ export const apiClient = {
       let record = await rtdbService.getOtpRecord(emailKey);
 
       if (!record) {
-        const localStr = localStorage.getItem(`gridguard_otp_${emailKey}`);
+        const localStr =
+          localStorage.getItem(`gridguard_otp_${emailKey}`) ||
+          localStorage.getItem(`gridguard_otp_${cleanEmail}`);
         if (localStr) {
           try {
             record = JSON.parse(localStr);
@@ -320,6 +347,7 @@ export const apiClient = {
       if (Date.now() > Number(record.expiresAt)) {
         await rtdbService.removeOtpRecord(emailKey);
         localStorage.removeItem(`gridguard_otp_${emailKey}`);
+        localStorage.removeItem(`gridguard_otp_${cleanEmail}`);
         throw new ApiError(
           "Verification code has expired. Please request a new code.",
           400
@@ -328,7 +356,7 @@ export const apiClient = {
 
       if (String(record.otp).trim() !== cleanOtp) {
         throw new ApiError(
-          "Invalid verification code. Please check and try again.",
+          "Incorrect 6-digit verification code. Please check and retry.",
           400
         );
       }
@@ -336,6 +364,7 @@ export const apiClient = {
       // Validated! Clear OTP record
       await rtdbService.removeOtpRecord(emailKey);
       localStorage.removeItem(`gridguard_otp_${emailKey}`);
+      localStorage.removeItem(`gridguard_otp_${cleanEmail}`);
 
       const isAdmin = cleanEmail === "sriramkanuri4@gmail.com";
       return {

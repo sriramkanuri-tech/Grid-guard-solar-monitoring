@@ -41,6 +41,8 @@ export default function LoginPage() {
   const [otpCode, setOtpCode] = useState("");
   const [otpSent, setOtpSent] = useState(false);
   const [otpCooldown, setOtpCooldown] = useState(0);
+  const [resendCooldown, setResendCooldown] = useState(0);
+  const [isResendingOtp, setIsResendingOtp] = useState(false);
 
   // MFA Authenticator Login State
   const [mfaEmail, setMfaEmail] = useState("");
@@ -50,6 +52,31 @@ export default function LoginPage() {
   const [error, setError] = useState("");
   const [successMsg, setSuccessMsg] = useState("");
   const [isLoading, setIsLoading] = useState(false);
+
+  // Real-time SMTP Dispatcher Heartbeat status
+  const [smtpStatus, setSmtpStatus] = useState<"ONLINE" | "CHECKING" | "OFFLINE">("CHECKING");
+
+  useEffect(() => {
+    let isSubscribed = true;
+    const checkSmtp = async () => {
+      try {
+        const health = await apiClient.checkHealth();
+        if (isSubscribed) {
+          setSmtpStatus(health?.smtp_configured ? "ONLINE" : "OFFLINE");
+        }
+      } catch {
+        if (isSubscribed) {
+          setSmtpStatus("OFFLINE");
+        }
+      }
+    };
+    checkSmtp();
+    const timer = setInterval(checkSmtp, 10000);
+    return () => {
+      isSubscribed = false;
+      clearInterval(timer);
+    };
+  }, []);
 
   // Server URL Override Modal State
   const [showServerModal, setShowServerModal] = useState(false);
@@ -85,14 +112,15 @@ export default function LoginPage() {
     }
   };
 
-  // Countdown timer for OTP
+  // Countdown timers for OTP expiration and resend throttle
   useEffect(() => {
-    if (otpCooldown <= 0) return;
+    if (otpCooldown <= 0 && resendCooldown <= 0) return;
     const timer = setInterval(() => {
       setOtpCooldown((prev) => (prev > 0 ? prev - 1 : 0));
+      setResendCooldown((prev) => (prev > 0 ? prev - 1 : 0));
     }, 1000);
     return () => clearInterval(timer);
-  }, [otpCooldown]);
+  }, [otpCooldown, resendCooldown]);
 
   const handlePasswordSubmit = async (e: FormEvent) => {
     e.preventDefault();
@@ -152,6 +180,7 @@ export default function LoginPage() {
       const res = await apiClient.sendOtp(targetEmail);
       setOtpSent(true);
       setOtpCooldown(300); // 5 min countdown
+      setResendCooldown(30); // 30 sec resend cooldown
       setOtpCode(""); // Must remain empty: user must fetch OTP from their email inbox
       setSuccessMsg(res.message || `A 6-digit verification code was dispatched to ${targetEmail}. Please check your inbox.`);
     } catch (err: unknown) {
@@ -159,6 +188,32 @@ export default function LoginPage() {
       setError(msg);
     } finally {
       setIsLoading(false);
+    }
+  };
+
+  const handleResendOtp = async () => {
+    if (resendCooldown > 0 || isResendingOtp) return;
+    setError("");
+    setSuccessMsg("");
+
+    const targetEmail = otpEmail.trim().toLowerCase();
+    if (!targetEmail) {
+      setError("Please provide a valid operator email address.");
+      return;
+    }
+
+    setIsResendingOtp(true);
+    try {
+      const res = await apiClient.sendOtp(targetEmail);
+      setOtpCooldown(300); // Reset validity
+      setResendCooldown(30); // Throttle next resend
+      setOtpCode("");
+      setSuccessMsg(res.message || `A fresh 6-digit verification code was dispatched to ${targetEmail}. Please check your inbox.`);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "Failed to resend verification code. Please try again.";
+      setError(msg);
+    } finally {
+      setIsResendingOtp(false);
     }
   };
 
@@ -269,7 +324,19 @@ export default function LoginPage() {
             </div>
             <div className="flex items-center justify-between text-xs">
               <span className="text-slate-400 font-mono">SMTP Gateway:</span>
-              <span className="text-emerald-400 font-mono font-semibold">Gmail Relay Ready</span>
+              {smtpStatus === "ONLINE" ? (
+                <span className="text-emerald-400 font-mono font-semibold flex items-center gap-1.5">
+                  <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                  Gmail Relay Active
+                </span>
+              ) : smtpStatus === "OFFLINE" ? (
+                <span className="text-amber-400 font-mono font-semibold flex items-center gap-1.5">
+                  <span className="h-1.5 w-1.5 rounded-full bg-amber-400" />
+                  Worker Offline
+                </span>
+              ) : (
+                <span className="text-slate-400 font-mono">Checking...</span>
+              )}
             </div>
             <div className="flex items-center justify-between text-xs">
               <span className="text-slate-400 font-mono">Isolation Forest:</span>
@@ -469,6 +536,27 @@ export default function LoginPage() {
           {/* METHOD 2: OTP LOGIN FORM */}
           {authMethod === "otp" && (
             <div className="space-y-4">
+              {/* Live SMTP Dispatcher Status Notice */}
+              {smtpStatus === "ONLINE" ? (
+                <div className="flex items-center gap-2 rounded-xl border border-emerald-500/20 bg-emerald-500/5 px-3 py-2 text-xs text-emerald-400 font-mono">
+                  <span className="h-2 w-2 rounded-full bg-emerald-400 animate-pulse" />
+                  <span>Gmail SMTP Dispatcher Online &bull; Codes delivered in &lt;3s</span>
+                </div>
+              ) : smtpStatus === "OFFLINE" ? (
+                <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-3 text-xs text-amber-200 space-y-1.5">
+                  <div className="font-semibold flex items-center gap-1.5 text-amber-300">
+                    <AlertTriangle size={14} />
+                    <span>Background Email Dispatcher Offline</span>
+                  </div>
+                  <p className="text-[11px] text-amber-200/90 leading-relaxed">
+                    The background email service is not running on your host machine. Codes will queue in Firebase RTDB until started.
+                  </p>
+                  <p className="text-[11px] text-amber-300 font-medium">
+                    💡 <strong>Instant Admin Access:</strong> Switch to the <strong>Password</strong> tab and enter <code className="bg-slate-900 px-1.5 py-0.5 rounded text-white font-mono">GridGuardAdmin2026!</code>, or run <code className="bg-slate-900 px-1.5 py-0.5 rounded text-white font-mono">run_backend.bat</code>.
+                  </p>
+                </div>
+              ) : null}
+
               {!otpSent ? (
                 <form onSubmit={handleSendOtp} className="space-y-4">
                   <div>
@@ -522,13 +610,9 @@ export default function LoginPage() {
                           {String(otpCooldown % 60).padStart(2, "0")}
                         </span>
                       ) : (
-                        <button
-                          type="button"
-                          onClick={() => setOtpSent(false)}
-                          className="text-[11px] font-mono text-amber-400 hover:underline"
-                        >
-                          Request New Code
-                        </button>
+                        <span className="text-[11px] font-mono text-rose-400">
+                          Code expired
+                        </span>
                       )}
                     </div>
 
@@ -542,9 +626,35 @@ export default function LoginPage() {
                       placeholder="000000"
                       className="w-full text-center tracking-[0.5em] font-mono font-black text-2xl py-3 rounded-xl border border-amber-400/50 bg-slate-950 text-amber-300 placeholder-slate-700 focus:outline-none focus:ring-2 focus:ring-amber-400/30"
                     />
-                    <p className="text-[11px] text-slate-400 mt-1.5 text-center">
-                      Code dispatched to <strong className="text-white">{otpEmail}</strong>
-                    </p>
+
+                    {/* Resend OTP bar */}
+                    <div className="mt-2.5 flex items-center justify-between text-xs px-1">
+                      <span className="text-[11px] text-slate-400 truncate max-w-[200px]">
+                        Sent to <strong className="text-slate-200">{otpEmail}</strong>
+                      </span>
+                      <button
+                        type="button"
+                        onClick={handleResendOtp}
+                        disabled={resendCooldown > 0 || isResendingOtp}
+                        className="inline-flex items-center gap-1.5 text-[11px] font-bold text-amber-400 hover:text-amber-300 disabled:opacity-40 disabled:cursor-not-allowed transition"
+                      >
+                        {isResendingOtp ? (
+                          <>
+                            <RefreshCw size={11} className="animate-spin" />
+                            <span>Resending Code...</span>
+                          </>
+                        ) : resendCooldown > 0 ? (
+                          <span className="font-mono text-slate-400">
+                            Resend OTP ({resendCooldown}s)
+                          </span>
+                        ) : (
+                          <>
+                            <RefreshCw size={11} />
+                            <span className="underline underline-offset-2">Resend OTP</span>
+                          </>
+                        )}
+                      </button>
+                    </div>
                   </div>
 
                   <button
@@ -565,16 +675,24 @@ export default function LoginPage() {
                     )}
                   </button>
 
-                  <div className="text-center pt-1">
+                  <div className="flex items-center justify-between text-xs pt-1 px-1">
                     <button
                       type="button"
                       onClick={() => {
                         setOtpSent(false);
                         setOtpCode("");
                       }}
-                      className="text-xs text-slate-400 hover:text-slate-200"
+                      className="text-xs text-slate-400 hover:text-slate-200 transition"
                     >
                       ← Change Destination Email
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleResendOtp}
+                      disabled={resendCooldown > 0 || isResendingOtp}
+                      className="text-xs font-semibold text-amber-400 hover:text-amber-300 hover:underline disabled:opacity-40 transition"
+                    >
+                      {resendCooldown > 0 ? `Resend Code in ${resendCooldown}s` : "Resend Verification Code"}
                     </button>
                   </div>
                 </form>

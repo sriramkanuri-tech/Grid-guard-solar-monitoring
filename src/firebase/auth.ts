@@ -10,7 +10,7 @@ import {
 import { auth } from "./config";
 import { rtdbService } from "./database";
 import { presenceManager } from "./presence";
-import { apiClient } from "../services/apiClient";
+import { apiClient, apiFetch, getEffectiveApiUrl } from "../services/apiClient";
 import type { UserProfile } from "../types/user";
 
 export const LOCAL_STORAGE_USER_KEY = "gridguard_user";
@@ -37,7 +37,7 @@ export const mapFirebaseUserToProfile = async (
   try {
     // 1. Fetch user role and status from Firebase Realtime Database
     const rtdbProfile = await rtdbService.getUserProfile(user.uid);
-    const isAdmin = isConfiguredAdminEmail(user.email || "") || rtdbProfile?.role === "admin";
+    const isAdmin = isConfiguredAdminEmail(user.email || "") || rtdbProfile?.role === "admin" || rtdbProfile?.isAdmin === true;
     const role = isAdmin ? "admin" : (rtdbProfile?.role || "member");
     const accountStatus = rtdbProfile?.status || "active";
 
@@ -88,9 +88,11 @@ export const loginUser = async (
   pass: string
 ): Promise<UserProfile> => {
   const cleanEmail = email.trim().toLowerCase();
+  const emailKey = cleanEmail.replace(/[^a-zA-Z0-9]/g, "_");
+  const isAdmin = isConfiguredAdminEmail(cleanEmail);
 
   try {
-    // 1. Attempt standard Firebase Auth sign-in
+    // 1. Attempt standard Firebase Auth sign-in if configured
     const cred = await signInWithEmailAndPassword(auth, cleanEmail, pass);
     const profile = await mapFirebaseUserToProfile(cred.user);
 
@@ -114,22 +116,21 @@ export const loginUser = async (
   } catch (err: unknown) {
     console.warn("[Auth] Firebase signIn error, checking fallback accounts:", err);
 
-    // If Firebase Auth fails because user is not yet created in Auth, check fallback database accounts
+    // 2. Check local account storage
     const savedAccountStr = localStorage.getItem(LOCAL_STORAGE_ACCOUNT_KEY);
     if (savedAccountStr) {
       try {
         const saved = JSON.parse(savedAccountStr);
-        if (saved.email.toLowerCase() === cleanEmail && saved.password === pass) {
-          const isAdmin = isConfiguredAdminEmail(cleanEmail) || saved.role === "admin";
+        if (saved.email?.toLowerCase() === cleanEmail && saved.password === pass) {
           const profile: UserProfile = {
-            uid: saved.uid || "local-user-" + Date.now(),
+            uid: saved.uid || "usr_" + emailKey,
             name: saved.name || cleanEmail.split("@")[0],
             email: cleanEmail,
             phone: saved.phone,
-            role: isAdmin ? "admin" : "member",
+            role: isAdmin ? "admin" : (saved.role || "member"),
             status: "active",
             isAdmin,
-            createdAt: new Date().toISOString(),
+            createdAt: saved.createdAt || new Date().toISOString(),
             lastLogin: new Date().toISOString(),
           };
           localStorage.setItem(LOCAL_STORAGE_USER_KEY, JSON.stringify(profile));
@@ -137,19 +138,53 @@ export const loginUser = async (
           await rtdbService.logAuditEvent("USER_LOGIN", cleanEmail, { method: "LOCAL_CREDENTIAL" }, profile.uid, cleanEmail);
           return profile;
         }
-      } catch {
-        // ignore
-      }
+      } catch {}
     }
 
-    // Admin bootstrap login for development setup if password provided in environment matches
-    if (isConfiguredAdminEmail(cleanEmail)) {
-      const adminPass = import.meta.env.ADMIN_INITIAL_PASSWORD || "GridGuardAdmin2026!";
+    // 3. Check RTDB credentials
+    try {
+      const rtdbCred = await rtdbService.getUserCredential(emailKey);
+      if (rtdbCred?.password && rtdbCred.password === pass) {
+        let profile = await rtdbService.findUserProfileByEmail(cleanEmail);
+        const userIsAdmin = isAdmin || profile?.role === "admin" || profile?.isAdmin === true;
+        if (!profile) {
+          profile = {
+            uid: "usr_" + emailKey,
+            name: cleanEmail.split("@")[0],
+            email: cleanEmail,
+            role: userIsAdmin ? "admin" : "member",
+            status: "active",
+            isAdmin: userIsAdmin,
+            createdAt: new Date().toISOString(),
+            lastLogin: new Date().toISOString(),
+          };
+          await rtdbService.saveUserProfile(profile.uid, profile);
+        } else {
+          profile = {
+            ...profile,
+            role: userIsAdmin ? "admin" : profile.role,
+            isAdmin: userIsAdmin,
+            lastLogin: new Date().toISOString(),
+          };
+          await rtdbService.saveUserProfile(profile.uid, profile);
+        }
+        localStorage.setItem(LOCAL_STORAGE_USER_KEY, JSON.stringify(profile));
+        presenceManager.initializePresence(profile.uid, profile.email, profile.name);
+        await rtdbService.logAuditEvent("USER_LOGIN", cleanEmail, { method: "RTDB_CREDENTIAL" }, profile.uid, cleanEmail);
+        return profile;
+      }
+    } catch (rtdbErr) {
+      console.warn("[Auth] RTDB credential check notice:", rtdbErr);
+    }
+
+    // 4. Admin bootstrap authentication for sriramkanuri4@gmail.com
+    if (isAdmin) {
+      const adminPass = (import.meta.env.VITE_ADMIN_INITIAL_PASSWORD || import.meta.env.ADMIN_INITIAL_PASSWORD || "GridGuardAdmin2026!");
       if (pass === adminPass) {
         const existingSecret = (await rtdbService.getMfaSecret(cleanEmail)) || localStorage.getItem("gridguard_mfa_" + cleanEmail);
         const profile: UserProfile = {
           uid: "admin-root-01",
-          name: "System Administrator",
+          name: "Sriram Kanuri (Admin)",
           email: cleanEmail,
           role: "admin",
           status: "active",
@@ -167,8 +202,8 @@ export const loginUser = async (
       }
     }
 
-    const errorMsg = err instanceof Error ? err.message : "Invalid credentials. Please verify email and password.";
-    throw new Error(errorMsg);
+    // Clean user-facing error message (never expose internal Firebase configuration errors)
+    throw new Error("Invalid email or password. Please verify your credentials, or sign in using the Email OTP tab.");
   }
 };
 
@@ -182,11 +217,20 @@ export const loginWithOtp = async (
   const cleanEmail = email.trim().toLowerCase();
 
   const result = await apiClient.verifyOtp(cleanEmail, otp.trim());
-  const isAdmin = isConfiguredAdminEmail(cleanEmail) || (result as any).isAdmin;
   const uid = "usr_" + cleanEmail.replace(/[^a-zA-Z0-9]/g, "_");
 
   // Fetch or create profile in RTDB
   let profile = await rtdbService.getUserProfile(uid);
+  if (!profile) {
+    profile = await rtdbService.findUserProfileByEmail(cleanEmail);
+  }
+
+  const isAdmin =
+    isConfiguredAdminEmail(cleanEmail) ||
+    Boolean((result as any).isAdmin) ||
+    profile?.role === "admin" ||
+    profile?.isAdmin === true;
+
   if (!profile) {
     profile = {
       uid,
@@ -206,7 +250,7 @@ export const loginWithOtp = async (
       isAdmin,
       lastLogin: new Date().toISOString(),
     };
-    await rtdbService.saveUserProfile(uid, profile);
+    await rtdbService.saveUserProfile(profile.uid || uid, profile);
   }
 
   localStorage.setItem(LOCAL_STORAGE_USER_KEY, JSON.stringify(profile));
@@ -331,6 +375,7 @@ export const resetPasswordWithOtp = async (
   await apiClient.verifyOtp(cleanEmail, otp.trim());
 
   // Update password in local account storage
+  const emailKey = cleanEmail.replace(/[^a-zA-Z0-9]/g, "_");
   const savedAccountStr = localStorage.getItem(LOCAL_STORAGE_ACCOUNT_KEY);
   if (savedAccountStr) {
     try {
@@ -344,8 +389,11 @@ export const resetPasswordWithOtp = async (
     }
   }
 
+  // Persist new credential in RTDB for multi-device sync
+  await rtdbService.saveUserCredential(emailKey, newPass);
+
   // Update last seen / audit in RTDB
-  const uid = "usr_" + cleanEmail.replace(/[^a-zA-Z0-9]/g, "_");
+  const uid = "usr_" + emailKey;
   await rtdbService.logAuditEvent("PASSWORD_RESET_OTP", cleanEmail, { method: "EMAIL_OTP" }, uid, cleanEmail);
 };
 
@@ -388,8 +436,28 @@ export const registerUser = async (
     lastLogin: nowStr,
   };
 
-  // Save to Realtime Database
+  // Save to PostgreSQL database via rtdbService and direct API
   await rtdbService.saveUserProfile(uid, profile);
+  const emailKey = cleanEmail.replace(/[^a-zA-Z0-9]/g, "_");
+  await rtdbService.saveUserCredential(emailKey, pass);
+
+  try {
+    await apiFetch("/api/users", {
+      method: "POST",
+      body: JSON.stringify({
+        name: cleanName,
+        email: cleanEmail,
+        phone: phone?.trim(),
+        role,
+        isAdmin,
+        status: "active",
+        is_active: true,
+        firebase_uid: uid,
+      }),
+    });
+  } catch (apiErr) {
+    console.warn("[Register] PostgreSQL user sync notice:", apiErr);
+  }
 
   // Backup account credential locally for resilience
   localStorage.setItem(
