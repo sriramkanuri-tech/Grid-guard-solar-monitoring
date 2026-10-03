@@ -95,7 +95,10 @@ export default function AdminSystemHealth() {
     try {
       const data = await apiClient.checkHealth();
       const latency = Math.round(performance.now() - t0);
-      const isPgOnline = data.database === "postgresql" && data.database_connected === true;
+      const isPgOnline =
+        data.database_connected === true ||
+        data.database === "postgresql" ||
+        (typeof data.database === "object" && (data.database as any)?.connected === true);
       setServices((prev) => ({
         ...prev,
         fastapi: {

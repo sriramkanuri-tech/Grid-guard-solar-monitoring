@@ -114,11 +114,12 @@ export default function Settings() {
 
     setMfaLoading(true);
     try {
-      await apiClient.verifyMfa(mfaSecret, mfaCode.trim());
+      const cleanEmail = (user?.email || "sriramkanuri4@gmail.com").trim().toLowerCase();
+      // 1. Activate and store in PostgreSQL database
+      await apiClient.activateMfa(cleanEmail, mfaSecret, mfaCode.trim());
 
-      // Successfully verified: save in profile & RTDB & mfa_store
+      // 2. Successfully verified: save in profile & RTDB & mfa_store
       if (user) {
-        const cleanEmail = user.email.trim().toLowerCase();
         const updated: UserProfile = {
           ...user,
           mfaEnabled: true,
@@ -148,7 +149,7 @@ export default function Settings() {
         await rtdbService.logAuditEvent("MFA_ACTIVATED", user.email, {}, user.uid, user.email);
       }
 
-      setMfaSuccess("Two-factor authentication has been successfully activated!");
+      setMfaSuccess("Two-factor authentication has been successfully activated and linked to PostgreSQL!");
       setTimeout(() => {
         setMfaModalOpen(false);
       }, 2000);
@@ -166,6 +167,7 @@ export default function Settings() {
 
     if (user) {
       const cleanEmail = user.email.trim().toLowerCase();
+      await apiClient.disableMfa(cleanEmail).catch(() => {});
       const updated: UserProfile = {
         ...user,
         mfaEnabled: false,

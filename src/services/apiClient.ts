@@ -185,8 +185,9 @@ export const apiClient = {
         uptime_seconds?: number;
         timestamp?: number;
         smtp_configured?: boolean;
-        database?: string;
+        database?: string | { type?: string; name?: string; connected?: boolean; tables?: Record<string, number> };
         database_connected?: boolean;
+        database_info?: { type?: string; name?: string; connected?: boolean; tables?: Record<string, number> };
         tables_count?: number;
       }>("/api/health");
     } catch {
@@ -246,48 +247,33 @@ export const apiClient = {
         message: res.message || `A 6-digit verification code has been dispatched to ${cleanEmail}.`,
         otp: effectiveOtp,
       };
-    } catch (fetchErr) {
+    } catch (fetchErr: any) {
       console.warn(
-        "[GridGuard API] Remote send-otp unreachable. Activating Cloud Firebase RTDB fallback:",
+        "[GridGuard API] Remote send-otp unreachable:",
         fetchErr
       );
 
-      const otpPayload = {
-        otp: clientCode,
-        email: cleanEmail,
-        createdAt: new Date().toISOString(),
-        expiresAt,
-        attempts: 0,
-      };
-
-      // Persist in localStorage
-      localStorage.setItem(`gridguard_otp_${emailKey}`, JSON.stringify(otpPayload));
-      localStorage.setItem(`gridguard_otp_${cleanEmail}`, JSON.stringify(otpPayload));
-
-      // Persist in Firebase RTDB
-      try {
-        await rtdbService.saveOtpRecord(emailKey, otpPayload);
-        await rtdbService.queueOtpDispatch(cleanEmail, clientCode);
-        // Ensure operator profile exists in RTDB so user receives all alerts
-        const existing = await rtdbService.getUserProfile(`usr_${emailKey}`);
-        if (!existing) {
-          await rtdbService.saveUserProfile(`usr_${emailKey}`, {
-            uid: `usr_${emailKey}`,
-            email: cleanEmail,
-            name: cleanEmail.split("@")[0],
-            role: cleanEmail === "sriramkanuri4@gmail.com" ? "admin" : "member",
-            status: "active",
-            createdAt: new Date().toISOString(),
-          });
-        }
-      } catch (rtdbErr) {
-        console.warn("[GridGuard API] RTDB saveOtp error, local fallback active:", rtdbErr);
+      // If backend returned an error (e.g. 500 SMTP failure or 429), rethrow it so the user sees the real message
+      if (fetchErr instanceof ApiError && fetchErr.statusCode > 0) {
+        throw fetchErr;
       }
 
-      return {
-        success: true,
-        message: `A 6-digit verification code has been dispatched to ${cleanEmail}. Please check your email inbox and enter the code.`,
-      };
+      // Check if user is in localhost development vs production
+      const isLocalhost = typeof window !== "undefined" && (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1");
+
+      if (isLocalhost) {
+        // In local development, if backend server is not running, inform operator directly
+        throw new ApiError(
+          "Grid Guard backend server is offline at " + getEffectiveApiUrl() + ". Please start the Python backend (uvicorn).",
+          0
+        );
+      }
+
+      // In production hosting (if backend public URL not configured or mixed-content blocked), alert the user clearly
+      throw new ApiError(
+        "Cannot reach Grid Guard API (" + getEffectiveApiUrl() + "). Please verify the backend service is running or configure the server URL.",
+        0
+      );
     }
   },
 
@@ -424,6 +410,67 @@ export const apiClient = {
         message: "MFA authenticator code verified successfully.",
       };
     }
+  },
+
+  /**
+   * Authenticate / Login using Email and 6-Digit MFA TOTP Code
+   * POST /api/auth/mfa/login
+   */
+  loginMfa: async (email: string, code: string, fallbackSecret?: string | null) => {
+    const cleanEmail = email.trim().toLowerCase();
+    const cleanCode = code.trim();
+    return await apiFetch<{
+      success: boolean;
+      email: string;
+      name?: string;
+      role?: string;
+      isAdmin?: boolean;
+      uid?: string;
+      message: string;
+    }>("/api/auth/mfa/login", {
+      method: "POST",
+      body: JSON.stringify({
+        email: cleanEmail,
+        code: cleanCode,
+        fallback_secret: fallbackSecret || null,
+      }),
+    });
+  },
+
+  /**
+   * Permanently activate MFA for account in PostgreSQL database
+   * POST /api/auth/mfa/activate
+   */
+  activateMfa: async (email: string, secret: string, code: string) => {
+    return await apiFetch<{ success: boolean; message: string }>("/api/auth/mfa/activate", {
+      method: "POST",
+      body: JSON.stringify({
+        email: email.trim().toLowerCase(),
+        secret: secret.trim(),
+        code: code.trim(),
+      }),
+    });
+  },
+
+  /**
+   * Disable MFA for account in PostgreSQL database
+   * POST /api/auth/mfa/disable
+   */
+  disableMfa: async (email: string) => {
+    return await apiFetch<{ success: boolean; message: string }>("/api/auth/mfa/disable", {
+      method: "POST",
+      body: JSON.stringify({ email: email.trim().toLowerCase() }),
+    });
+  },
+
+  /**
+   * Check MFA status in PostgreSQL database
+   * GET /api/auth/mfa/status
+   */
+  getMfaStatus: async (email: string) => {
+    return await apiFetch<{ email: string; mfa_enabled: boolean }>(
+      `/api/auth/mfa/status?email=${encodeURIComponent(email.trim().toLowerCase())}`
+    );
   },
 
   /**

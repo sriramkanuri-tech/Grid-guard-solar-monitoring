@@ -65,6 +65,8 @@ class User(Base):
     created_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
     updated_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
     last_login_at = Column(DateTime(timezone=True), nullable=True)
+    mfa_secret = Column(String(128), nullable=True)
+    mfa_enabled = Column(Boolean, nullable=False, default=False)
 
     sessions = relationship("UserSession", back_populates="user", cascade="all, delete-orphan")
     presence = relationship("Presence", back_populates="user", cascade="all, delete-orphan")

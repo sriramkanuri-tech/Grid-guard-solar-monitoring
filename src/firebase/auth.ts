@@ -268,98 +268,86 @@ export const loginWithMfa = async (
   code: string
 ): Promise<UserProfile> => {
   const cleanEmail = email.trim().toLowerCase();
-  const isAdmin = isConfiguredAdminEmail(cleanEmail);
+  const cleanCode = code.trim();
+  const isAdminConfig = isConfiguredAdminEmail(cleanEmail);
 
-  // 1. Multi-source secret resolution
-  let secret = await rtdbService.getMfaSecret(cleanEmail);
-
-  if (!secret) {
-    secret = localStorage.getItem("gridguard_mfa_" + cleanEmail) || null;
-  }
-
-  if (!secret) {
+  // Check if there is a local cached secret to provide as resilience migration seed
+  let localSecret = localStorage.getItem("gridguard_mfa_" + cleanEmail) || null;
+  if (!localSecret) {
     const savedAccountStr = localStorage.getItem(LOCAL_STORAGE_ACCOUNT_KEY);
     if (savedAccountStr) {
       try {
         const saved = JSON.parse(savedAccountStr);
         if (saved.email?.toLowerCase() === cleanEmail && saved.mfaSecret) {
-          secret = saved.mfaSecret;
+          localSecret = saved.mfaSecret;
         }
-      } catch {
-        // ignore
-      }
+      } catch {}
     }
   }
 
-  if (!secret) {
-    const savedUserStr = localStorage.getItem(LOCAL_STORAGE_USER_KEY);
-    if (savedUserStr) {
-      try {
-        const saved = JSON.parse(savedUserStr);
-        if (saved.email?.toLowerCase() === cleanEmail && saved.mfaSecret) {
-          secret = saved.mfaSecret;
-        }
-      } catch {
-        // ignore
-      }
-    }
-  }
-
-  if (!secret) {
-    throw new Error(
-      "MFA is not yet configured for this account. Please sign in with Password or Email OTP first, then scan the Authenticator QR code in Settings."
-    );
-  }
-
-  // 2. Verify 6-digit TOTP code against Python FastAPI Auth Engine
-  await apiClient.verifyMfa(secret, code.trim());
-
-  // 3. TOTP Verified! Fetch or construct user profile
-  let profile = await rtdbService.findUserProfileByEmail(cleanEmail);
-  const uid =
-    profile?.uid ||
-    (isAdmin ? "admin-root-01" : "usr_" + cleanEmail.replace(/[^a-zA-Z0-9]/g, "_"));
-
-  if (!profile) {
-    profile = {
-      uid,
-      name: isAdmin ? "System Administrator" : cleanEmail.split("@")[0],
+  // 1. Primary PostgreSQL Authentication via FastAPI Backend
+  try {
+    const res = await apiClient.loginMfa(cleanEmail, cleanCode, localSecret);
+    const isAdmin = Boolean(res.isAdmin || res.role === "admin" || isAdminConfig);
+    const profile: UserProfile = {
+      uid: res.uid || "usr_" + cleanEmail.replace(/[^a-zA-Z0-9]/g, "_"),
+      name: res.name || cleanEmail.split("@")[0],
       email: cleanEmail,
-      role: isAdmin ? "admin" : "member",
+      role: isAdmin ? "admin" : (res.role || "member"),
       status: "active",
       isAdmin,
       mfaEnabled: true,
-      mfaSecret: secret,
-      createdAt: new Date().toISOString(),
       lastLogin: new Date().toISOString(),
     };
-  } else {
+
+    localStorage.setItem(LOCAL_STORAGE_USER_KEY, JSON.stringify(profile));
+    presenceManager.initializePresence(profile.uid, profile.email, profile.name);
+    await rtdbService.logAuditEvent(
+      "USER_LOGIN_MFA",
+      cleanEmail,
+      { method: "POSTGRES_MFA_TOTP" },
+      profile.uid,
+      cleanEmail
+    );
+    return profile;
+  } catch (err: any) {
+    // If backend gave an explicit error (401 invalid code, 400 mfa inactive, 404 not found), propagate it
+    if (err.statusCode && err.statusCode > 0) {
+      throw err;
+    }
+
+    // 2. Offline / Edge Fallback validation
+    let secret = localSecret || (await rtdbService.getMfaSecret(cleanEmail));
+    if (!secret) {
+      throw new Error(
+        "MFA is not yet active for this account. Please sign in with Email OTP or Password first, then scan the Authenticator QR code in Settings."
+      );
+    }
+
+    await apiClient.verifyMfa(secret, cleanCode);
+
+    let profile = await rtdbService.findUserProfileByEmail(cleanEmail);
+    const uid =
+      profile?.uid ||
+      (isAdminConfig ? "admin-root-01" : "usr_" + cleanEmail.replace(/[^a-zA-Z0-9]/g, "_"));
+
     profile = {
-      ...profile,
-      role: isAdmin ? "admin" : profile.role,
-      isAdmin,
+      ...(profile || {}),
+      uid,
+      name: profile?.name || (isAdminConfig ? "System Administrator" : cleanEmail.split("@")[0]),
+      email: cleanEmail,
+      role: isAdminConfig ? "admin" : (profile?.role || "member"),
+      status: "active",
+      isAdmin: isAdminConfig || profile?.role === "admin",
       mfaEnabled: true,
       mfaSecret: secret,
       lastLogin: new Date().toISOString(),
     };
+
+    localStorage.setItem(LOCAL_STORAGE_USER_KEY, JSON.stringify(profile));
+    presenceManager.initializePresence(profile.uid, profile.email, profile.name);
+    return profile;
   }
-
-  // 4. Save profile, mfa store, and session
-  await rtdbService.saveUserProfile(uid, profile);
-  await rtdbService.saveMfaSecret(cleanEmail, secret);
-
-  localStorage.setItem(LOCAL_STORAGE_USER_KEY, JSON.stringify(profile));
-  localStorage.setItem("gridguard_mfa_" + cleanEmail, secret);
-  presenceManager.initializePresence(profile.uid, profile.email, profile.name);
-  await rtdbService.logAuditEvent(
-    "USER_LOGIN_MFA",
-    cleanEmail,
-    { method: "MFA_TOTP" },
-    profile.uid,
-    cleanEmail
-  );
-
-  return profile;
 };
 
 /**
